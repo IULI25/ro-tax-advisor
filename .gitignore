@@ -1,0 +1,8 @@
+input/*
+tmp/chunks/*
+tmp/docling/*
+tmp/html/*
+.env
+venv
+*.pyc
+.DS_Store
