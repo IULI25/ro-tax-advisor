@@ -1,152 +1,110 @@
+"""
+Streamlit Chat Interface for Claude (Anthropic API)
+
+Setup:
+    pip install streamlit anthropic
+
+Run:
+    streamlit run chat_app.py
+
+You'll be prompted for your Anthropic API key in the sidebar,
+or you can set it as an environment variable: ANTHROPIC_API_KEY
+"""
+
+import os
 import streamlit as st
-from streamlit_chatbox import *
-import time
-import simplejson as json
+from anthropic import Anthropic
 
+# ---------- Page config ----------
+st.set_page_config(page_title="Chat", page_icon="💬", layout="centered")
 
-llm = FakeLLM()
-chat_box = ChatBox(
-    use_rich_markdown=True, # use streamlit-markdown
-    user_theme="green", # see streamlit_markdown.st_markdown for all available themes
-    assistant_theme="blue",
-)
-chat_box.use_chat_name("chat1") # add a chat conversatoin
-
-def on_chat_change():
-    chat_box.use_chat_name(st.session_state["chat_name"])
-    chat_box.context_to_session() # restore widget values to st.session_state when chat name changed
-
-
+# ---------- Sidebar ----------
 with st.sidebar:
-    st.subheader('start to chat using streamlit')
-    chat_name = st.selectbox("Chat Session:", ["default", "chat1"], key="chat_name", on_change=on_chat_change)
-    chat_box.use_chat_name(chat_name)
-    streaming = st.checkbox('streaming', key="streaming")
-    in_expander = st.checkbox('show messages in expander', key="in_expander")
-    show_history = st.checkbox('show session state', key="show_history")
-    chat_box.context_from_session(exclude=["chat_name"]) # save widget values to chat context
+    st.title("⚙️ Settings")
 
-    st.divider()
-
-    btns = st.container()
-
-    file = st.file_uploader(
-        "chat history json",
-        type=["json"]
+    api_key = st.text_input(
+        "Anthropic API Key",
+        value=os.environ.get("ANTHROPIC_API_KEY", ""),
+        type="password",
+        help="Get a key at https://console.anthropic.com",
     )
 
-    if st.button("Load Json") and file:
-        data = json.load(file)
-        chat_box.from_dict(data)
+    model = st.selectbox(
+        "Model",
+        [
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
+            "claude-haiku-4-6",
+        ],
+        index=0,
+    )
 
+    system_prompt = st.text_area(
+        "System prompt",
+        value="You are a helpful, friendly assistant.",
+        height=100,
+    )
 
-chat_box.init_session()
-chat_box.output_messages()
+    max_tokens = st.slider("Max tokens", 256, 4096, 1024, step=256)
+    temperature = st.slider("Temperature", 0.0, 1.0, 0.7, step=0.1)
 
-def on_feedback(
-    feedback,
-    chat_history_id: str = "",
-    history_index: int = -1,
-):
-    reason = feedback["text"]
-    score_int = chat_box.set_feedback(feedback=feedback, history_index=history_index) # convert emoji to integer
-    # do something
-    st.session_state["need_rerun"] = True
+    st.divider()
+    if st.button("🗑️ Clear chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
 
+# ---------- Session state ----------
+if "messages" not in st.session_state:
+    st.session_state.messages = []  # list of {"role": ..., "content": ...}
 
-feedback_kwargs = {
-    "feedback_type": "thumbs",
-    "optional_text_label": "wellcome to feedback",
-}
+# ---------- Header ----------
+st.title("💬 Chat with Claude")
+st.caption(f"Model: `{model}`")
 
-if query := st.chat_input('input your question here'):
-    chat_box.user_say(query)
-    if streaming:
-        generator = llm.chat_stream(query)
-        elements = chat_box.ai_say(
-            [
-                # you can use string for Markdown output if no other parameters provided
-                Markdown("thinking", in_expander=in_expander,
-                         expanded=True, title="answer"),
-                Markdown("", in_expander=in_expander, title="references"),
-            ]
-        )
-        time.sleep(1)
-        text = ""
-        for x, docs in generator:
-            text += x
-            chat_box.update_msg(text, element_index=0, streaming=True)
-        # update the element without focus
-        chat_box.update_msg(text, element_index=0, streaming=False, state="complete")
-        chat_box.update_msg("\n\n".join(docs), element_index=1, streaming=False, state="complete")
-        chat_history_id = "some id"
-        chat_box.show_feedback(**feedback_kwargs,
-                                key=chat_history_id,
-                                on_submit=on_feedback,
-                                kwargs={"chat_history_id": chat_history_id, "history_index": len(chat_box.history) - 1})
-    else:
-        text, docs = llm.chat(query)
-        chat_box.ai_say(
-            [
-                Markdown(text, in_expander=in_expander,
-                         expanded=True, title="answer"),
-                Markdown("\n\n".join(docs), in_expander=in_expander,
-                         title="references"),
-            ]
-        )
+# ---------- Render chat history ----------
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-cols = st.columns(2)
-if cols[0].button('show me the multimedia'):
-    chat_box.ai_say(Image(
-        'https://tse4-mm.cn.bing.net/th/id/OIP-C.cy76ifbr2oQPMEs2H82D-QHaEv?w=284&h=181&c=7&r=0&o=5&dpr=1.5&pid=1.7'))
-    time.sleep(0.5)
-    chat_box.ai_say(
-        Video('https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4'))
-    time.sleep(0.5)
-    chat_box.ai_say(
-        Audio('https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4'))
+# ---------- Chat input ----------
+prompt = st.chat_input("Type a message...")
 
-if cols[1].button('run agent'):
-    chat_box.user_say('run agent')
-    agent = FakeAgent()
-    text = ""
+if prompt:
+    if not api_key:
+        st.error("Please enter your Anthropic API key in the sidebar.")
+        st.stop()
 
-    # streaming:
-    chat_box.ai_say() # generate a blank placeholder to render messages
-    for d in agent.run_stream():
-        if d["type"] == "complete":
-            chat_box.update_msg(expanded=False, state="complete")
-            chat_box.insert_msg(d["llm_output"])
-            break
+    # Show and store the user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        if d["status"] == 1:
-            chat_box.update_msg(expanded=False, state="complete")
-            text = ""
-            chat_box.insert_msg(Markdown(text, title=d["text"], in_expander=True, expanded=True))
-        elif d["status"] == 2:
-            text += d["llm_output"]
-            chat_box.update_msg(text, streaming=True)
-        else:
-            chat_box.update_msg(text, streaming=False)
+    # Call the API and stream the response
+    client = Anthropic(api_key=api_key)
 
-btns.download_button(
-    "Export Markdown",
-    "".join(chat_box.export2md()),
-    file_name=f"chat_history.md",
-    mime="text/markdown",
-)
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        full_response = ""
 
-btns.download_button(
-    "Export Json",
-    chat_box.to_json(),
-    file_name="chat_history.json",
-    mime="text/json",
-)
+        try:
+            with client.messages.stream(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_prompt,
+                messages=[
+                    {"role": m["role"], "content": m["content"]}
+                    for m in st.session_state.messages
+                ],
+            ) as stream:
+                for text in stream.text_stream:
+                    full_response += text
+                    placeholder.markdown(full_response + "▌")
+            placeholder.markdown(full_response)
+        except Exception as e:
+            full_response = f"⚠️ Error: {e}"
+            placeholder.markdown(full_response)
 
-if btns.button("clear history"):
-    chat_box.init_session(clear=True)
-    st.experimental_rerun()
-
-
-if show_history:
-    st.write(st.session_state)
+    st.session_state.messages.append(
+        {"role": "assistant", "content": full_response}
+    )
