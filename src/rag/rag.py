@@ -74,7 +74,7 @@ def extrage_text_din_url(url: str, save_html: bool = True, save_json: bool = Tru
  
  extrage_text_din_url=(Legea nr.227_2015.html , save_html, save_json )
 
-def raspunde(api_key: str, model_name: str, docling_doc(Legea nr.227_2015.html): str, intrebare: str, istoric: list) -> str:
+def raspunde(api_key: str, model_name: str, docling_doc: str, intrebare: str, istoric: list) -> str:
     mesaje_istoric = ""
     for q, a in istoric[-3:]:
         mesaje_istoric += f"Întrebare anterioară: {q}\nRăspuns anterior: {a}\n\n"
