@@ -36,33 +36,42 @@ if "istoric" not in st.session_state:
  
  
 def extrage_text_din_fisier(file_path: str, save_html: bool = True, save_json: bool = True) -> str:
-    path_obj = Path(file_path).resolve()
-    
-    # 1. Verify file exists locally before running Docling
-    if not path_obj.is_file():
-        raise FileNotFoundError(f"Fisierul nu a fost gasit la cale: {path_obj}")
+    # 1. Resolve path relative to project root or current working directory
+    current_dir = Path(__file__).resolve().parent  # /src/rag
+    project_root = current_dir.parent.parent        # /mount/src/ro-tax-advisor
 
-    # 2. Setup directories
-    html_dir = Path("tmp/html")
-    docling_dir = Path("tmp/docling")
+    target_path = Path(file_path)
+    
+    # Try relative to current working dir first, then project root
+    if not target_path.is_file():
+        target_path = (project_root / file_path).resolve()
+
+    # If still not found, list available files to help debug
+    if not target_path.is_file():
+        available_files = [str(f.relative_to(project_root)) for f in project_root.glob("**/*") if f.is_file()]
+        raise FileNotFoundError(
+            f"Fișierul nu a fost găsit la: {target_path}\n"
+            f"Fișiere disponibile în proiect:\n" + "\n".join(available_files[:10])
+        )
+
+    # 2. Prepare directories for output artifacts
+    html_dir = project_root / "tmp/html"
+    docling_dir = project_root / "tmp/docling"
     html_dir.mkdir(parents=True, exist_ok=True)
     docling_dir.mkdir(parents=True, exist_ok=True)
 
-    # 3. Convert via Docling (passing Path object)
+    # 3. Convert document using Docling
     converter = DocumentConverter()
-    result = converter.convert(path_obj)
+    result = converter.convert(target_path)
     docling_doc = result.document
 
-    # 4. Save visual HTML check
+    # 4. Export visual HTML and structural JSON
     if save_html:
-        html_out = html_dir / f"{path_obj.stem}.html"
-        with open(html_out, "w", encoding="utf-8") as f:
+        with open(html_dir / f"{target_path.stem}.html", "w", encoding="utf-8") as f:
             f.write(docling_doc.export_to_html())
 
-    # 5. Save JSON for reuse
     if save_json:
-        json_out = docling_dir / f"{path_obj.stem}.json"
-        with open(json_out, "w", encoding="utf-8") as f:
+        with open(docling_dir / f"{target_path.stem}.json", "w", encoding="utf-8") as f:
             f.write(docling_doc.model_dump_json())
 
     return docling_doc.export_to_markdown()
