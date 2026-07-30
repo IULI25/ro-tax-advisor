@@ -70,7 +70,7 @@ def extrage_text_din_url(url: str, save_html: bool = True, save_json: bool = Tru
             f.write(docling_doc.model_dump_json())
 
     # 4. Return clean exported text
-    return docling_doc.export_to_markdown(Legea nr.227_2015.html)
+    return docling_doc.export_to_markdown()
  
  
 def raspunde(api_key: str, model_name: str, docling_doc.export_to_markdown: str, intrebare: str, istoric: list) -> str:
