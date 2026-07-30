@@ -73,7 +73,7 @@ def extrage_text_din_url(url: str, save_html: bool = True, save_json: bool = Tru
     return docling_doc.export_to_markdown()
  
  
-def raspunde(api_key: str, model_name: str, context: str, intrebare: str, istoric: list) -> str:
+def raspunde(api_key: str, model_name: str, docling_doc.export_to_markdown: str, intrebare: str, istoric: list) -> str:
     mesaje_istoric = ""
     for q, a in istoric[-3:]:
         mesaje_istoric += f"Întrebare anterioară: {q}\nRăspuns anterior: {a}\n\n"
@@ -105,7 +105,7 @@ intreaba_btn = st.button("Trimite întrebarea")
 if intreaba_btn:
     if not api_key:
         st.warning("Cheia API lipsește din .env — vezi mesajul din bara laterală.")
-    elif not st.session_state.context:
+    elif not docling_doc.export_to_markdown:
         st.warning("Încarcă mai întâi o pagină web.")
     elif not intrebare:
         st.warning("Scrie o întrebare.")
