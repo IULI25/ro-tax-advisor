@@ -1,8 +1,4 @@
-input/*
-tmp/chunks/*
-tmp/docling/*
-tmp/html/*
-.env
-venv
+.streamlit/secrets.toml
+__pycache__/
 *.pyc
-.DS_Store
+.env
