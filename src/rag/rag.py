@@ -72,7 +72,7 @@ def extrage_text_din_url(url: str, save_html: bool = True, save_json: bool = Tru
     # 4. Return clean exported text
     return docling_doc.export_to_markdown()
  
- extrage_text_din_url=(Legea nr.227_2015.html , save_html, save_json )
+extrage_text_din_url(https://static.anaf.ro/static/10/Anaf/legislatie/L_227_2015.htm: str, save_html: bool = True, save_json: bool = True)
 
 def raspunde(api_key: str, model_name: str, docling_doc: str, intrebare: str, istoric: list) -> str:
     mesaje_istoric = ""
