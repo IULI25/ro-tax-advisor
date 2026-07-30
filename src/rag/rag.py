@@ -31,8 +31,6 @@ with st.sidebar:
 # ---------- State ----------
 if "context" not in st.session_state:
     st.session_state.context = ""
-if "url_curent" not in st.session_state:
-    st.session_state.url_curent = ""
 if "istoric" not in st.session_state:
     st.session_state.istoric = []
  
@@ -98,33 +96,6 @@ Dacă informația nu se găsește în conținut, spune clar că nu ai găsit ră
     response = model.generate_content(prompt)
     return response.text
  
- 
-# ---------- UI: link ----------
-url = st.text_input("🔗 Link către pagina HTML", placeholder="Legea nr.227_2015.html")
- 
-col1, col2 = st.columns([1, 3])
-with col1:
-    incarca = st.button("Încarcă pagina", use_container_width=True)
- 
-if incarca:
-    if not url:
-        st.warning("Introdu un link mai întâi.")
-    else:
-        with st.spinner("Se extrage conținutul paginii..."):
-            try:
-                st.session_state.context = extrage_text_din_url(url)
-                st.session_state.url_curent = url
-                st.session_state.istoric = []
-                st.success(f"Pagina a fost încărcată ({len(st.session_state.context)} caractere de text extras).")
-            except Exception as e:
-                st.error(f"Eroare la încărcarea paginii: {e}")
- 
-if st.session_state.context:
-    with st.expander("📄 Vezi conținutul extras din pagină"):
-        st.text(st.session_state.context[:5000] + ("..." if len(st.session_state.context) > 5000 else ""))
- 
-st.divider()
- 
 # ---------- UI: întrebări ----------
 st.subheader("💬 Întreabă agentul")
  
@@ -141,7 +112,7 @@ if intreaba_btn:
     else:
         with st.spinner("Agentul gândește..."):
             try:
-                raspuns = raspunde(api_key, model, st.session_state.context, intrebare, st.session_state.istoric)
+                raspuns = raspunde(api_key, model, docling_doc.export_to_markdown, intrebare, st.session_state.istoric)
                 st.session_state.istoric.append((intrebare, raspuns))
             except Exception as e:
                 st.error(f"Eroare: {e}")
