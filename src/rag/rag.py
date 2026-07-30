@@ -2,6 +2,9 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import google.generativeai as genai
+import os
+from pathlib import Path
+from docling.document_converter import DocumentConverter
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
 st.set_page_config(page_title="Agent AI din pagină web", page_icon="🤖", layout="centered")
@@ -37,17 +40,42 @@ if "istoric" not in st.session_state:
     st.session_state.istoric = []
  
  
-def extrage_text_din_url(url: str) -> str:
-    resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
- 
-    for tag in soup(["script", "style", "nav", "footer", "header", "noscript"]):
-        tag.decompose()
- 
-    text = soup.get_text(separator="\n")
-    linii = [linie.strip() for linie in text.splitlines() if linie.strip()]
-    return "\n".join(linii)
+def extrage_text_din_url(url: str, save_html: bool = True, save_json: bool = True) -> str:
+    """
+    Parses an HTML URL using Docling, saves intermediate artifacts 
+    (HTML under tmp/html/ and JSON under tmp/docling/), and returns 
+    the parsed text content.
+    """
+    # 1. Setup persistent storage paths
+    html_dir = Path("tmp/html")
+    docling_dir = Path("tmp/docling")
+    html_dir.mkdir(parents=True, exist_ok=True)
+    docling_dir.mkdir(parents=True, exist_ok=True)
+
+    # 2. Convert directly from URL using Docling
+    converter = DocumentConverter()
+    result = converter.convert(url)
+    docling_doc = result.document
+
+    # 3. Derive a clean filename from the URL endpoint
+    url_filename = url.split("//")[-1].replace("/", "_").replace("?", "_")
+    if not url_filename.endswith(".html"):
+        url_filename += ".html"
+
+    # Save visual HTML artifact
+    if save_html:
+        html_path = html_dir / url_filename
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(docling_doc.export_to_html())
+
+    # Save JSON structure artifact for instant downstream reloading
+    if save_json:
+        json_path = docling_dir / f"{Path(url_filename).stem}.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            f.write(docling_doc.model_dump_json())
+
+    # 4. Return clean exported text
+    return docling_doc.export_to_markdown()
  
  
 def raspunde(api_key: str, model_name: str, context: str, intrebare: str, istoric: list) -> str:
