@@ -70,7 +70,7 @@ def extrage_text_din_url(url: str, save_html: bool = True, save_json: bool = Tru
             f.write(docling_doc.model_dump_json())
 
     # 4. Return clean exported text
-    return docling_doc.export_to_markdown()
+    return docling_doc.export_to_markdown(Legea nr.227_2015.html)
  
  
 def raspunde(api_key: str, model_name: str, docling_doc.export_to_markdown: str, intrebare: str, istoric: list) -> str:
@@ -80,8 +80,6 @@ def raspunde(api_key: str, model_name: str, docling_doc.export_to_markdown: str,
  
     prompt = f"""Ai la dispoziție următorul conținut extras de pe un site:
  
----
-{context}
 ---
  
 {mesaje_istoric}
@@ -95,7 +93,9 @@ Dacă informația nu se găsește în conținut, spune clar că nu ai găsit ră
     model = genai.GenerativeModel(model_name)
     response = model.generate_content(prompt)
     return response.text
- 
+
+extrage_text_din_url=(Legea nr.227_2015.html , save_html, save_json)
+
 # ---------- UI: întrebări ----------
 st.subheader("💬 Întreabă agentul")
  
