@@ -77,7 +77,7 @@ def extrage_text_din_fisier(file_path: str, save_html: bool = True, save_json: b
     return docling_doc.export_to_markdown()
 
 # Example usage:
-text = extrage_text_din_fisier("/ro-tax-advisor/src/ingestion/Legea nr.227_2015")
+text = extrage_text_din_fisier("Legea nr.227_2015.html")
 
 def raspunde(api_key: str, model_name: str, docling_doc: str, intrebare: str, istoric: list) -> str:
     mesaje_istoric = ""
