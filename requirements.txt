@@ -3,3 +3,7 @@ requests
 beautifulsoup4
 google-generativeai
 python-dotenv
+docling
+docling-core 
+sentence-transformers 
+chromadb
