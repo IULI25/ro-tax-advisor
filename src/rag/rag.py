@@ -76,7 +76,7 @@ Dacă informația nu se găsește în conținut, spune clar că nu ai găsit ră
  
  
 # ---------- UI: link ----------
-url = st.text_input("🔗 Link către pagina HTML", placeholder="Legea nr.227_2015.html")
+url = st.text_input("🔗 Link către pagina HTML", placeholder="https://exemplu.ro/pagina")
  
 col1, col2 = st.columns([1, 3])
 with col1:
