@@ -72,8 +72,9 @@ def extrage_text_din_url(url: str, save_html: bool = True, save_json: bool = Tru
     # 4. Return clean exported text
     return docling_doc.export_to_markdown()
  
- 
-def raspunde(api_key: str, model_name: str, docling_doc.export_to_markdown: str, intrebare: str, istoric: list) -> str:
+ extrage_text_din_url=(Legea nr.227_2015.html , save_html, save_json )
+
+def raspunde(api_key: str, model_name: str, docling_doc(Legea nr.227_2015.html): str, intrebare: str, istoric: list) -> str:
     mesaje_istoric = ""
     for q, a in istoric[-3:]:
         mesaje_istoric += f"Întrebare anterioară: {q}\nRăspuns anterior: {a}\n\n"
@@ -94,7 +95,7 @@ Dacă informația nu se găsește în conținut, spune clar că nu ai găsit ră
     response = model.generate_content(prompt)
     return response.text
 
-extrage_text_din_url=(Legea nr.227_2015.html , save_html, save_json)
+
 
 # ---------- UI: întrebări ----------
 st.subheader("💬 Întreabă agentul")
