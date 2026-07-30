@@ -35,44 +35,40 @@ if "istoric" not in st.session_state:
     st.session_state.istoric = []
  
  
-def extrage_text_din_url(url: str, save_html: bool = True, save_json: bool = True) -> str:
-    """
-    Parses an HTML URL using Docling, saves intermediate artifacts 
-    (HTML under tmp/html/ and JSON under tmp/docling/), and returns 
-    the parsed text content.
-    """
-    # 1. Setup persistent storage paths
+def extrage_text_din_fisier(file_path: str, save_html: bool = True, save_json: bool = True) -> str:
+    path_obj = Path(file_path).resolve()
+    
+    # 1. Verify file exists locally before running Docling
+    if not path_obj.is_file():
+        raise FileNotFoundError(f"Fisierul nu a fost gasit la cale: {path_obj}")
+
+    # 2. Setup directories
     html_dir = Path("tmp/html")
     docling_dir = Path("tmp/docling")
     html_dir.mkdir(parents=True, exist_ok=True)
     docling_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2. Convert directly from URL using Docling
+    # 3. Convert via Docling (passing Path object)
     converter = DocumentConverter()
-    result = converter.convert(url)
+    result = converter.convert(path_obj)
     docling_doc = result.document
 
-    # 3. Derive a clean filename from the URL endpoint
-    url_filename = url.split("//")[-1].replace("/", "_").replace("?", "_")
-    if not url_filename.endswith(".html"):
-        url_filename += ".html"
-
-    # Save visual HTML artifact
+    # 4. Save visual HTML check
     if save_html:
-        html_path = html_dir / url_filename
-        with open(html_path, "w", encoding="utf-8") as f:
+        html_out = html_dir / f"{path_obj.stem}.html"
+        with open(html_out, "w", encoding="utf-8") as f:
             f.write(docling_doc.export_to_html())
 
-    # Save JSON structure artifact for instant downstream reloading
+    # 5. Save JSON for reuse
     if save_json:
-        json_path = docling_dir / f"{Path(url_filename).stem}.json"
-        with open(json_path, "w", encoding="utf-8") as f:
+        json_out = docling_dir / f"{path_obj.stem}.json"
+        with open(json_out, "w", encoding="utf-8") as f:
             f.write(docling_doc.model_dump_json())
 
-    # 4. Return clean exported text
     return docling_doc.export_to_markdown()
- 
-text = extrage_text_din_url("Legea nr.227_2015.html", save_html=True, save_json=True)
+
+# Example usage:
+text = extrage_text_din_fisier("Legea nr.227_2015.html")
 
 def raspunde(api_key: str, model_name: str, docling_doc: str, intrebare: str, istoric: list) -> str:
     mesaje_istoric = ""
