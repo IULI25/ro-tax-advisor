@@ -2,8 +2,8 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import google.generativeai as genai
-from config import GEMINI_API_KEY
- 
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+
 st.set_page_config(page_title="Agent AI din pagină web", page_icon="🤖", layout="centered")
  
 st.title("🤖 Agent AI - răspunde din conținutul unei pagini web")
