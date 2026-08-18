@@ -7,3 +7,5 @@ docling
 docling-core 
 sentence-transformers 
 chromadb
+scikit-learn 
+numpy
