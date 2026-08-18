@@ -2,8 +2,7 @@ import streamlit as st
 import requests
 import google.generativeai as genai
  
-# --- import din modulul propriu (chunking.py trebuie să fie în același folder) ---
-from chunking import extrage_text_din_html, genereaza_chunkuri_finale, selecteaza_chunkuri_relevante
+
  
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
  
@@ -31,24 +30,6 @@ if "chunkuri" not in st.session_state:
 if "istoric" not in st.session_state:
     st.session_state.istoric = []
  
-# ---------- UI: încărcare pagină web ----------
-st.subheader("🌐 Încarcă o pagină web")
-url = st.text_input("URL", placeholder="https://exemplu.ro/pagina")
-incarca_btn = st.button("Extrage conținutul")
- 
-if incarca_btn:
-    if not url:
-        st.warning("Introdu un URL.")
-    else:
-        with st.spinner("Descarc și procesez pagina..."):
-            try:
-                resp = requests.get(url, timeout=15)
-                resp.raise_for_status()
-                text = extrage_text_din_html(resp.text)
-                st.session_state.chunkuri = genereaza_chunkuri_finale(text, marime_max=1000, overlap=150)
-                st.success(f"Am extras {len(st.session_state.chunkuri)} fragmente din pagină.")
-            except Exception as e:
-                st.error(f"Eroare la descărcare/extragere: {e}")
  
  
 def raspunde(api_key: str, model_name: str, chunkuri: list, intrebare: str, istoric: list) -> str:
