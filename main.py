@@ -24,7 +24,7 @@ with st.sidebar:
             "❌ Nu am găsit GEMINI_API_KEY.\n\n"
             "Adaugă-l în `.streamlit/secrets.toml` sau în configurația Streamlit."
         )
-    model = st.selectbox("Model", ["gemini-2.0-flash", "gemini-2.0-flash-lite"], index=0)
+    model = st.selectbox("Model", ["gemini-3.5-flash", "gemini-3.5-flash-lite"], index=0)
 
 # ---------- State ----------
 if "chunkuri" not in st.session_state:
