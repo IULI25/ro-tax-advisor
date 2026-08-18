@@ -1,127 +1,113 @@
+from bs4 import BeautifulSoup
 import re
-from typing import List, Dict
+from collections import Counter
+import math
 
 
-def chunk_dupa_articole(text: str) -> List[str]:
+def extrage_text_din_html(html: str) -> str:
     """
-    Împarte textul pe baza unor marcatori de tip:
-    - Articolul 1
-    - ART. 1
-    - ART 1
-
-    Dacă nu găsește structură, întoarce lista cu textul original.
+    Extrage textul curat dintr-un HTML.
+    Elimină script, style și spații inutile.
     """
-    pattern = re.compile(
-        r"(?=^\s*(Articolul\s+\d+|ART\.?\s*\d+))",
-        re.MULTILINE | re.IGNORECASE
-    )
+    soup = BeautifulSoup(html, "html.parser")
 
-    parti = pattern.split(text)
+    # Elimină elementele care nu sunt utile pentru conținut
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
 
-    chunkuri = []
-    buffer = ""
+    text = soup.get_text(separator="\n")
+    lines = [line.strip() for line in text.splitlines()]
+    lines = [line for line in lines if line]
 
-    for parte in parti:
-        if not parte or not parte.strip():
-            continue
-
-        if re.match(r"^\s*(Articolul\s+\d+|ART\.?\s*\d+)", parte, re.IGNORECASE):
-            if buffer.strip():
-                chunkuri.append(buffer.strip())
-            buffer = parte
-        else:
-            buffer += parte
-
-    if buffer.strip():
-        chunkuri.append(buffer.strip())
-
-    return chunkuri if chunkuri else [text]
+    return "\n".join(lines)
 
 
-def chunk_generic(text: str, marime_max: int = 1000, overlap: int = 150) -> List[str]:
+def _tokenize(text: str):
     """
-    Chunking generic pe caractere, cu overlap.
-    Folosit ca fallback pentru texte fără structură clară sau pentru chunk-uri prea lungi.
+    Transformă textul în tokeni simpli.
     """
-    if marime_max <= 0:
-        raise ValueError("marime_max trebuie să fie > 0.")
-    if overlap < 0:
-        raise ValueError("overlap trebuie să fie >= 0.")
-    if overlap >= marime_max:
-        raise ValueError("overlap trebuie să fie mai mic decât marime_max.")
+    return re.findall(r"\w+", text.lower())
 
-    chunkuri = []
+
+def _split_into_chunks(text: str, chunk_size: int = 800, overlap: int = 100):
+    """
+    Împarte textul în chunk-uri de lungime aproximativă.
+    """
+    words = text.split()
+    if not words:
+        return []
+
+    chunks = []
     start = 0
-    lungime = len(text)
 
-    while start < lungime:
-        end = min(start + marime_max, lungime)
-        chunkuri.append(text[start:end])
+    while start < len(words):
+        end = min(start + chunk_size, len(words))
+        chunk = " ".join(words[start:end])
+        chunks.append(chunk)
 
-        if end == lungime:
+        if end == len(words):
             break
 
         start = end - overlap
 
+    return chunks
+
+
+def genereaza_chunkuri_finale(text: str, chunk_size: int = 800, overlap: int = 100):
+    """
+    Creează lista finală de chunk-uri sub formă de dicționare.
+    Fiecare chunk conține textul și un id.
+    """
+    raw_chunks = _split_into_chunks(text, chunk_size=chunk_size, overlap=overlap)
+
+    chunkuri = []
+    for i, chunk in enumerate(raw_chunks):
+        chunkuri.append({
+            "id": i,
+            "text": chunk
+        })
+
     return chunkuri
 
 
-def genereaza_chunkuri_finale(text: str, marime_max: int = 1000, overlap: int = 150) -> List[Dict]:
+def _cosine_similarity(text1: str, text2: str) -> float:
     """
-    Strategie combinată:
-    - încearcă împărțirea pe articole
-    - dacă un chunk este prea lung, îl sparge generic
-    - întoarce o listă de dicționare cu id, text, lungime
+    Calculează similaritatea cosine între două texte, pe baza frecvenței cuvintelor.
     """
-    chunkuri_articole = chunk_dupa_articole(text)
+    tokens1 = _tokenize(text1)
+    tokens2 = _tokenize(text2)
 
-    # Dacă nu există structură reală și textul este mare, folosește direct chunking generic
-    if len(chunkuri_articole) == 1 and len(text) > marime_max:
-        chunkuri_articole = chunk_generic(text, marime_max=marime_max, overlap=overlap)
+    if not tokens1 or not tokens2:
+        return 0.0
 
-    rezultat = []
+    c1 = Counter(tokens1)
+    c2 = Counter(tokens2)
 
-    for i, chunk in enumerate(chunkuri_articole):
-        if len(chunk) <= marime_max:
-            rezultat.append({
-                "id": f"chunk_{i}",
-                "text": chunk,
-                "lungime": len(chunk)
-            })
-        else:
-            subchunkuri = chunk_generic(chunk, marime_max=marime_max, overlap=overlap)
-            for j, sub in enumerate(subchunkuri):
-                rezultat.append({
-                    "id": f"chunk_{i}_{j}",
-                    "text": sub,
-                    "lungime": len(sub)
-                })
+    all_terms = set(c1) | set(c2)
 
-    return rezultat
+    dot = sum(c1[t] * c2[t] for t in all_terms)
+    norm1 = math.sqrt(sum(v * v for v in c1.values()))
+    norm2 = math.sqrt(sum(v * v for v in c2.values()))
+
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+
+    return dot / (norm1 * norm2)
 
 
-def selecteaza_chunkuri_relevante(cuvinte_cheie: List[str], chunkuri: List[Dict], top_k: int = 5) -> List[Dict]:
+def selecteaza_chunkuri_relevante(chunkuri: list, intrebare: str, top_k: int = 5):
     """
-    Variantă lexicală simplă de relevanță, bazată pe apariția cuvintelor-cheie.
-    Nu este semantică, dar poate fi utilă ca fallback.
-
-    Scorul este numărul de apariții ale cuvintelor-cheie în chunk.
+    Selectează cele mai relevante chunk-uri pentru întrebare.
+    Se bazează pe similaritate lexicală simplă.
     """
-    rezultate = []
+    if not chunkuri:
+        return []
 
-    cuvinte_cheie_lower = [c.lower() for c in cuvinte_cheie]
-
+    scoruri = []
     for chunk in chunkuri:
-        text_lower = chunk["text"].lower()
-        scor = sum(text_lower.count(cuvant) for cuvant in cuvinte_cheie_lower)
+        scor = _cosine_similarity(chunk["text"], intrebare)
+        scoruri.append((scor, chunk))
 
-        if scor > 0:
-            rezultate.append({
-                "id": chunk["id"],
-                "text": chunk["text"],
-                "lungime": chunk["lungime"],
-                "score": scor
-            })
+    scoruri.sort(key=lambda x: x[0], reverse=True)
 
-    rezultate.sort(key=lambda x: x["score"], reverse=True)
-    return rezultate[:top_k]
+    return [chunk for scor, chunk in scoruri[:top_k]]

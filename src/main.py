@@ -13,7 +13,7 @@ st.set_page_config(page_title="Agent AI din pagină web", page_icon="🤖", layo
 st.title("🤖 Consilier AI")
 
 api_key = GEMINI_API_KEY
-fisier_html_local = "pagina.html"
+fisier_html_local = "Legea_nr.227_2015.html"
 
 with st.sidebar:
     st.header("Setări")
