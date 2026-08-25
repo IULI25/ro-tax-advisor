@@ -24,7 +24,7 @@ with st.sidebar:
             "❌ Nu am găsit GEMINI_API_KEY.\n\n"
             "Adaugă-l în `.streamlit/secrets.toml` sau în configurația Streamlit."
         )
-    model = st.selectbox("Model", ["gemini-3.5-flash", "gemini-3.5-flash-lite"], index=0)
+    model_name = st.selectbox("Model", ["gemini-3.5-flash", "gemini-3.5-flash-lite"], index=0)
 
 # ---------- State ----------
 if "chunkuri" not in st.session_state:
@@ -41,7 +41,10 @@ def proceseaza_fisier_local(nume_fisier: str):
         continut_html = f.read()
 
     text_extras = extrage_text_din_html(continut_html)
-    chunkuri = genereaza_chunkuri_finale(text_extras)
+
+    # Recomandat: genereaza_chunkuri_finale să returneze dicționare cu text + source + chunk_index
+    chunkuri = genereaza_chunkuri_finale(text_extras, sursa=nume_fisier)
+
     return chunkuri, text_extras
 
 # Încarcă automat fișierul local la pornirea aplicației
@@ -57,23 +60,40 @@ if not st.session_state.pagina_incarcata:
         st.error(f"❌ Eroare la procesarea fișierului HTML: {e}")
 
 # ---------- Funcția de răspuns ----------
-def raspunde(api_key: str, model_name: str, chunkuri: list, intrebare: str, istoric: list) -> str:
+def raspunde(api_key: str, model_name: str, chunkuri: list, intrebare: str, istoric: list) -> tuple:
+    """
+    Returnează: (răspuns, chunkuri_relevante)
+    """
     chunkuri_relevante = selecteaza_chunkuri_relevante(chunkuri, intrebare, top_k=5)
-    context = "\n\n---\n\n".join(c["text"] for c in chunkuri_relevante)
+
+    context_piese = []
+    for c in chunkuri_relevante:
+        sursa = c.get("source", "necunoscut")
+        idx = c.get("chunk_index", c.get("id", -1))
+        scor = c.get("score", 0.0)
+        text = c.get("text", "")
+
+        context_piese.append(
+            f"[Sursă: {sursa} | Chunk: {idx} | Scor: {scor:.4f}]\n{text}"
+        )
+
+    context = "\n\n---\n\n".join(context_piese)
 
     mesaje_istoric = ""
     for q, a in istoric[-3:]:
         mesaje_istoric += f"Întrebare anterioară: {q}\nRăspuns anterior: {a}\n\n"
 
-    prompt = f"""Ai la dispoziție următoarele fragmente extrase din fișierul HTML local:
+    prompt = f"""Ai la dispoziție următoarele fragmente extrase din fișiere locale:
 
 ---
 {context}
 ---
 
 {mesaje_istoric}
-Pe baza EXCLUSIV a conținutului de mai sus, răspunde la întrebarea de mai jos.
-Dacă informația nu se găsește în conținut, spune clar că nu ai găsit răspunsul în fișier.
+Instrucțiuni:
+- Răspunde exclusiv pe baza conținutului de mai sus.
+- Dacă informația nu există în fragmentele oferite, spune clar că nu ai găsit răspunsul în fișier.
+- Citează, dacă este posibil, sursa fragmentului folosit.
 
 Întrebare: {intrebare}
 """
@@ -81,7 +101,8 @@ Dacă informația nu se găsește în conținut, spune clar că nu ai găsit ră
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(model_name)
     response = model.generate_content(prompt)
-    return response.text
+
+    return response.text, chunkuri_relevante
 
 # ---------- UI: întrebări ----------
 st.subheader("💬 Întreabă agentul")
@@ -99,16 +120,28 @@ if intreaba_btn:
     else:
         with st.spinner("Agentul gândește..."):
             try:
-                raspuns = raspunde(
+                raspuns, chunkuri_relevante = raspunde(
                     api_key,
-                    model,
+                    model_name,
                     st.session_state.chunkuri,
                     intrebare,
                     st.session_state.istoric
                 )
+
                 st.session_state.istoric.append((intrebare, raspuns))
+
                 st.markdown("### Răspuns")
                 st.write(raspuns)
+
+                st.markdown("### Surse folosite")
+                for c in chunkuri_relevante:
+                    st.write(
+                        f"- **Sursă:** {c.get('source', 'necunoscut')} | "
+                        f"**Chunk:** {c.get('chunk_index', c.get('id', -1))} | "
+                        f"**Scor:** {c.get('score', 0.0):.4f}"
+                    )
+                    st.caption(c.get("text", "")[:500] + ("..." if len(c.get("text", "")) > 500 else ""))
+
             except Exception as e:
                 st.error(f"Eroare: {e}")
 

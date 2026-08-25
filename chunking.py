@@ -53,23 +53,30 @@ def _split_into_chunks(text: str, chunk_size: int = 800, overlap: int = 100):
     return chunks
 
 
-def genereaza_chunkuri_finale(text: str, chunk_size: int = 800, overlap: int = 100):
-    """
-    Creează lista finală de chunk-uri sub formă de dicționare.
-    Fiecare chunk conține textul și un id.
-    """
-    raw_chunks = _split_into_chunks(text, chunk_size=chunk_size, overlap=overlap)
-
+def genereaza_chunkuri_finale(text: str, sursa: str, chunk_size: int = 120, overlap: int = 20):
+    words = text.split()
     chunkuri = []
-    for i, chunk in enumerate(raw_chunks):
+    start = 0
+    idx = 0
+
+    while start < len(words):
+        end = min(start + chunk_size, len(words))
+        chunk_text = " ".join(words[start:end])
+
         chunkuri.append({
-            "id": i,
-            "text": chunk
+            "id": idx,
+            "chunk_index": idx,
+            "text": chunk_text,
+            "source": sursa
         })
 
+        idx += 1
+        if end == len(words):
+            break
+        start = end - overlap
+
     return chunkuri
-
-
+    
 def _cosine_similarity(text1: str, text2: str) -> float:
     """
     Calculează similaritatea cosine între două texte, pe baza frecvenței cuvintelor.
