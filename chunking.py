@@ -2,8 +2,40 @@ from bs4 import BeautifulSoup
 import re
 from collections import Counter
 import math
+from functools import lru_cache
+from typing import List, Dict, Any
+
+import numpy as np
+import faiss
+from sentence_transformers import SentenceTransformer
 
 
+# ----------------------------
+# CONFIGURARE MODEL
+# ----------------------------
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+
+
+@lru_cache(maxsize=1)
+def _get_model():
+    """
+    Încarcă modelul de embeddings o singură dată.
+    """
+    return SentenceTransformer(EMBEDDING_MODEL)
+
+
+def _embed_texts(texts: List[str]) -> np.ndarray:
+    """
+    Generează embeddings pentru o listă de texte.
+    """
+    model = _get_model()
+    embeddings = model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+    return np.array(embeddings, dtype="float32")
+
+
+# ----------------------------
+# 1. EXTRAGERE TEXT DIN HTML
+# ----------------------------
 def extrage_text_din_html(html: str) -> str:
     """
     Extrage textul curat dintr-un HTML.
@@ -11,7 +43,6 @@ def extrage_text_din_html(html: str) -> str:
     """
     soup = BeautifulSoup(html, "html.parser")
 
-    # Elimină elementele care nu sunt utile pentru conținut
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
 
@@ -22,13 +53,20 @@ def extrage_text_din_html(html: str) -> str:
     return "\n".join(lines)
 
 
+# ----------------------------
+# 2. TOKENIZARE (opțional, păstrată pentru compatibilitate)
+# ----------------------------
 def _tokenize(text: str):
     """
     Transformă textul în tokeni simpli.
+    Păstrată pentru compatibilitate, dar nu mai este folosită în retrieval.
     """
     return re.findall(r"\w+", text.lower())
 
 
+# ----------------------------
+# 3. SPLIT ÎN CHUNK-URI
+# ----------------------------
 def _split_into_chunks(text: str, chunk_size: int = 800, overlap: int = 100):
     """
     Împarte textul în chunk-uri de lungime aproximativă.
@@ -53,7 +91,13 @@ def _split_into_chunks(text: str, chunk_size: int = 800, overlap: int = 100):
     return chunks
 
 
+# ----------------------------
+# 4. GENERARE CHUNK-URI FINALE
+# ----------------------------
 def genereaza_chunkuri_finale(text: str, sursa: str, chunk_size: int = 120, overlap: int = 20):
+    """
+    Generează chunk-uri cu metadate.
+    """
     words = text.split()
     chunkuri = []
     start = 0
@@ -76,45 +120,55 @@ def genereaza_chunkuri_finale(text: str, sursa: str, chunk_size: int = 120, over
         start = end - overlap
 
     return chunkuri
-    
-def _cosine_similarity(text1: str, text2: str) -> float:
+
+
+# ----------------------------
+# 5. CONSTRUIRE INDEX FAISS
+# ----------------------------
+def _construieste_index_faiss(chunkuri: List[Dict[str, Any]]):
     """
-    Calculează similaritatea cosine între două texte, pe baza frecvenței cuvintelor.
+    Construiește indexul FAISS pentru chunk-urile date.
+    Returnează indexul și matricea de embeddings.
     """
-    tokens1 = _tokenize(text1)
-    tokens2 = _tokenize(text2)
+    if not chunkuri:
+        return None, None
 
-    if not tokens1 or not tokens2:
-        return 0.0
+    texts = [chunk["text"] for chunk in chunkuri]
+    embeddings = _embed_texts(texts)
 
-    c1 = Counter(tokens1)
-    c2 = Counter(tokens2)
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatIP(dim)  # Inner Product; merge bine cu embeddings normalizate
+    index.add(embeddings)
 
-    all_terms = set(c1) | set(c2)
-
-    dot = sum(c1[t] * c2[t] for t in all_terms)
-    norm1 = math.sqrt(sum(v * v for v in c1.values()))
-    norm2 = math.sqrt(sum(v * v for v in c2.values()))
-
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-
-    return dot / (norm1 * norm2)
+    return index, embeddings
 
 
+# ----------------------------
+# 6. SELECȚIE CHUNK-URI RELEVANTE
+# ----------------------------
 def selecteaza_chunkuri_relevante(chunkuri: list, intrebare: str, top_k: int = 5):
     """
-    Selectează cele mai relevante chunk-uri pentru întrebare.
-    Se bazează pe similaritate lexicală simplă.
+    Selectează cele mai relevante chunk-uri pentru întrebare folosind embeddings + FAISS.
     """
     if not chunkuri:
         return []
 
-    scoruri = []
-    for chunk in chunkuri:
-        scor = _cosine_similarity(chunk["text"], intrebare)
-        scoruri.append((scor, chunk))
+    texts = [chunk["text"] for chunk in chunkuri]
+    embeddings = _embed_texts(texts)
 
-    scoruri.sort(key=lambda x: x[0], reverse=True)
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatIP(dim)
+    index.add(embeddings)
 
-    return [chunk for scor, chunk in scoruri[:top_k]]
+    query_embedding = _embed_texts([intrebare])
+
+    k = min(top_k, len(chunkuri))
+    scores, indices = index.search(query_embedding, k)
+
+    rezultate = []
+    for score, idx in zip(scores[0], indices[0]):
+        chunk = chunkuri[idx].copy()
+        chunk["score"] = float(score)
+        rezultate.append(chunk)
+
+    return rezultate
