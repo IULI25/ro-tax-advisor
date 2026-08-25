@@ -1,11 +1,6 @@
 streamlit
-requests
-beautifulsoup4
 google-generativeai
-python-dotenv
-docling
-docling-core 
-sentence-transformers 
-chromadb
-scikit-learn 
+beautifulsoup4
 numpy
+faiss-cpu
+sentence-transformers
