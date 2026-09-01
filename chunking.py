@@ -5,25 +5,25 @@ from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from bs4 import BeautifulSoup
 import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted, GoogleAPIError
 
 
 # ----------------------------
 # CONFIGURARE MODEL EMBEDDING
 # ----------------------------
-EMBEDDING_MODEL = "gemini-embedding-2"
-# 768 e suficient pentru un singur document de lege și ține indexul mic/rapid;
-# modelul suportă și 1536 / 3072 dacă vrei mai multă precizie.
+# Numele oficial al modelului în SDK-ul Gemini (ex: "models/text-embedding-004" sau "models/gemini-embedding-001")
+EMBEDDING_MODEL = "models/gemini-embedding-001"
 EMBEDDING_DIM = 768
 
-# API-ul Gemini acceptă embed în batch, dar limităm dimensiunea cererii
-# ca să evităm erori de tip "payload prea mare" / rate limit.
-EMBEDDING_BATCH_SIZE = 90
-# Câte reîncercări facem dacă lovim un rate limit (429) sau o eroare temporară.
-EMBEDDING_MAX_RETRIES = 3
-EMBEDDING_RETRY_DELAY_SEC = 5
+# Dimensiunea batch-ului redusă la 30 pentru a nu atinge limita de tokeni/cereri pe minut pe planul gratuit
+EMBEDDING_BATCH_SIZE = 30
+EMBEDDING_MAX_RETRIES = 5
+EMBEDDING_INITIAL_RETRY_DELAY = 10.0
+
+# Pauză proactivă de 2 secunde între batch-uri consecutive
+BATCH_DELAY_SEC = 2.0
 
 # Regex pentru detectarea începutului unui articol de lege
-# (ex: "Articolul 1", "Art. 25", "ART. 3^1")
 _ARTICOL_RE = re.compile(r"(?m)^\s*(Articolul|Art\.)\s+\d+", re.IGNORECASE)
 
 
@@ -53,7 +53,6 @@ def extrage_text_din_html(html: str) -> str:
 def _split_pe_articole(text: str) -> List[str]:
     """
     Împarte textul la fiecare început de articol ("Articolul N" / "Art. N").
-    Dacă nu găsește marcatori de articol, întoarce lista goală (fallback în apelant).
     """
     matches = list(_ARTICOL_RE.finditer(text))
     if len(matches) < 2:
@@ -70,7 +69,7 @@ def _split_pe_articole(text: str) -> List[str]:
 
 
 def _split_segment_in_bucati(segment: str, chunk_size: int, overlap: int) -> List[str]:
-    """Împarte un segment (ex: un articol lung) în bucăți de `chunk_size` cuvinte, cu overlap."""
+    """Împarte un segment în bucăți de `chunk_size` cuvinte, cu overlap."""
     words = segment.split()
     if not words:
         return []
@@ -89,10 +88,6 @@ def _split_segment_in_bucati(segment: str, chunk_size: int, overlap: int) -> Lis
 
 
 def _split_into_chunks(text: str, chunk_size: int = 800, overlap: int = 100) -> List[str]:
-    """
-    Împarte textul în chunk-uri de lungime aproximativă (pe cuvinte).
-    Păstrată pentru compatibilitate.
-    """
     return _split_segment_in_bucati(text, chunk_size, overlap)
 
 
@@ -105,12 +100,6 @@ def genereaza_chunkuri_finale(
     chunk_size: int = 220,
     overlap: int = 30,
 ) -> List[Dict[str, Any]]:
-    """
-    Generează chunk-uri cu metadate. Pentru texte de lege, încearcă întâi
-    să taie pe granițe de articol (rezultate mult mai relevante la retrieval
-    decât o tăiere oarbă la N cuvinte), apoi sub-împarte articolele lungi.
-    Dacă nu detectează articole, cade pe tăierea clasică pe cuvinte.
-    """
     segmente = _split_pe_articole(text)
     if not segmente:
         segmente = [text]
@@ -118,7 +107,6 @@ def genereaza_chunkuri_finale(
     chunkuri = []
     idx = 0
     for segment in segmente:
-        # titlul articolului, dacă există, folosit ca metadată suplimentară
         titlu_match = _ARTICOL_RE.match(segment)
         titlu = segment.splitlines()[0].strip() if titlu_match else None
 
@@ -141,14 +129,12 @@ def genereaza_chunkuri_finale(
 # ----------------------------
 def _embed_batch(texts: List[str], task_type: str) -> np.ndarray:
     """
-    Apelează Gemini embed_content cu Exponential Backoff pentru erori de Rate Limit (429).
+    Apelează Gemini embed_content cu extragere dinamică a timpului de retry oferit de server.
     """
-    max_retries = 5
-    base_delay = 10  # Secunde de la care pornește așteptarea
-
+    delay = EMBEDDING_INITIAL_RETRY_DELAY
     ultima_eroare: Optional[Exception] = None
-    
-    for incercare in range(max_retries):
+
+    for incercare in range(EMBEDDING_MAX_RETRIES):
         try:
             rezultat = genai.embed_content(
                 model=EMBEDDING_MODEL,
@@ -160,34 +146,45 @@ def _embed_batch(texts: List[str], task_type: str) -> np.ndarray:
             if embeddings and isinstance(embeddings[0], (int, float)):
                 embeddings = [embeddings]
             return np.asarray(embeddings, dtype="float32")
-            
-        except Exception as e:
+
+        except (ResourceExhausted, GoogleAPIError, Exception) as e:
             ultima_eroare = e
-            # Verificăm dacă e eroare de quota / rate limit (429)
-            if "429" in str(e) or "Quota exceeded" in str(e):
-                delay = base_delay * (2 ** incercare)  # Așteaptă 10s, 20s, 40s...
-                print(f"[Rate Limit] Așteptăm {delay} secunde înainte de reîncercare (Încercarea {incercare + 1}/{max_retries})...")
-                time.sleep(delay)
+            if incercare < EMBEDDING_MAX_RETRIES - 1:
+                # Căutăm secunde recomandate direct din mesajul de eroare al API-ului
+                match = re.search(r"retry in (\d+(\.\d+)?)s", str(e), re.IGNORECASE)
+                if match:
+                    timp_asteptare = float(match.group(1)) + 1.0
+                else:
+                    timp_asteptare = delay
+                    delay *= 2  # Exponential backoff
+
+                print(
+                    f"[Rate Limit] Așteptăm {timp_asteptare:.1f} secunde "
+                    f"(Încercarea {incercare + 1}/{EMBEDDING_MAX_RETRIES})..."
+                )
+                time.sleep(timp_asteptare)
             else:
-                # Dacă e altă eroare, așteptare scurtă
-                time.sleep(3)
+                break
 
     raise RuntimeError(
-        f"Nu am putut genera embeddings după {max_retries} încercări: {ultima_eroare}"
+        f"Nu am putut genera embeddings după {EMBEDDING_MAX_RETRIES} încercări: {ultima_eroare}"
     ) from ultima_eroare
+
 
 def _embed_texts(texts: List[str], task_type: str = "retrieval_document") -> np.ndarray:
     if not texts:
         return np.zeros((0, EMBEDDING_DIM), dtype="float32")
 
     toate = []
-    for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+    total_batches = (len(texts) + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
+
+    for idx, i in enumerate(range(0, len(texts), EMBEDDING_BATCH_SIZE)):
         batch = texts[i:i + EMBEDDING_BATCH_SIZE]
         toate.append(_embed_batch(batch, task_type))
-        
-        # Pauză de 1-2 secunde între batch-uri consecutive pentru a nu sufoca API-ul gratuit
-        if i + EMBEDDING_BATCH_SIZE < len(texts):
-            time.sleep(1.5)
+
+        # Introducem o pauză controlată între batch-uri consecutive
+        if idx < total_batches - 1:
+            time.sleep(BATCH_DELAY_SEC)
 
     embeddings = np.vstack(toate)
 
@@ -197,29 +194,18 @@ def _embed_texts(texts: List[str], task_type: str = "retrieval_document") -> np.
 
 
 # ----------------------------
-# 5. INDEX ÎN MEMORIE (înlocuiește FAISS)
+# 5. INDEX ÎN MEMORIE
 # ----------------------------
 class IndexEmbeddings:
-    """
-    Index simplu, în memorie, peste o matrice de embeddings deja normalizate.
-    Expune aceeași interfață `.search(query_embeddings, k) -> (scoruri, indici)`
-    ca indexul FAISS folosit anterior, ca să nu fie nevoie de modificări în main.py.
-
-    Pentru un singur document (legea 227/2015, câteva sute de chunk-uri),
-    o căutare brute-force cu numpy e mai mult decât suficient de rapidă —
-    nu are sens complexitatea suplimentară a FAISS.
-    """
-
     def __init__(self, embeddings: np.ndarray):
-        self.embeddings = embeddings  # (n_chunkuri, dim), deja normalizate
+        self.embeddings = embeddings
 
     def search(self, query_embeddings: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
         if self.embeddings.shape[0] == 0:
             n_q = query_embeddings.shape[0]
             return np.zeros((n_q, 0), dtype="float32"), np.full((n_q, 0), -1, dtype="int64")
 
-        # similaritate cosinus = produs scalar (vectorii sunt normalizați L2)
-        scoruri_toate = query_embeddings @ self.embeddings.T  # (n_queries, n_chunkuri)
+        scoruri_toate = query_embeddings @ self.embeddings.T
         k = min(k, scoruri_toate.shape[1])
 
         indici = np.argsort(-scoruri_toate, axis=1)[:, :k]
@@ -228,12 +214,6 @@ class IndexEmbeddings:
 
 
 def construieste_index(chunkuri: List[Dict[str, Any]]) -> Tuple[Optional[IndexEmbeddings], Optional[np.ndarray]]:
-    """
-    Construiește indexul pentru chunk-urile date, o singură dată (calculează
-    embeddings Gemini pentru toate chunk-urile). Apelantul (main.py) trebuie
-    să pună rezultatul în cache (st.cache_resource) și să-l refolosească la
-    fiecare întrebare — NU reconstrui la fiecare query (costă apeluri API).
-    """
     if not chunkuri:
         return None, None
 
@@ -253,20 +233,10 @@ def selecteaza_chunkuri_relevante(
     top_k: int = 5,
     index: Optional[IndexEmbeddings] = None,
 ) -> List[Dict[str, Any]]:
-    """
-    Selectează cele mai relevante chunk-uri pentru întrebare folosind
-    embeddings Gemini + căutare cosinus.
-
-    Dacă `index` este furnizat (construit anterior cu `construieste_index` și pus
-    în cache), NU se mai recalculează embeddings pentru toate chunk-urile — se
-    calculează doar embedding-ul întrebării (1 apel API per întrebare, în loc
-    de N apeluri la fiecare mesaj).
-    """
     if not chunkuri:
         return []
 
     if index is None:
-        # fallback: fără index precalculat, îl construim (costă N apeluri API)
         index, _ = construieste_index(chunkuri)
         if index is None:
             return []
