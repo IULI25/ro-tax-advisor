@@ -32,8 +32,15 @@ with st.sidebar:
         st.session_state.istoric = []
         st.rerun()
 
-if api_key:
-    genai.configure(api_key=api_key)
+if not api_key:
+    st.error(
+        "❌ Nu am găsit GEMINI_API_KEY.\n\n"
+        "Adaugă-l în `.streamlit/secrets.toml` sau în configurația Streamlit "
+        "pentru a putea genera atât embeddings, cât și răspunsurile."
+    )
+    st.stop()
+
+genai.configure(api_key=api_key)
 
 # ---------- Încărcare + chunking (cache pe conținut, rulează o singură dată) ----------
 @st.cache_data(show_spinner=False)
@@ -45,7 +52,9 @@ def proceseaza_fisier_local(nume_fisier: str):
     return chunkuri
 
 
-# ---------- Index FAISS (obiect ne-serializabil -> cache_resource, NU cache_data) ----------
+# ---------- Index de embeddings Gemini (obiect ne-serializabil -> cache_resource, NU cache_data) ----------
+# Se face câte 1 apel API la Gemini per batch de chunk-uri, o singură dată,
+# datorită cache-ului de mai jos (nu se recalculează la fiecare întrebare).
 @st.cache_resource(show_spinner=False)
 def construieste_index_cache(nume_fisier: str, n_chunkuri: int):
     """
@@ -63,7 +72,7 @@ if "istoric" not in st.session_state:
 
 # ---------- Încărcare inițială ----------
 try:
-    with st.spinner("Se încarcă și se indexează documentul..."):
+    with st.spinner("Se încarcă documentul și se generează embeddings (Gemini)..."):
         chunkuri = proceseaza_fisier_local(FISIER_HTML_LOCAL)
         index = construieste_index_cache(FISIER_HTML_LOCAL, len(chunkuri))
     st.caption(f"📄 `{FISIER_HTML_LOCAL}` — {len(chunkuri)} fragmente indexate.")
