@@ -1,14 +1,3 @@
-"""
-Extragere text din HTML, chunking pe articole de lege și căutare semantică
-folosind embeddings Gemini (gemini-embedding-001), fără dependențe grele
-precum sentence-transformers / PyTorch / FAISS.
-
-IMPORTANT: `genai.configure(api_key=...)` trebuie apelat (în main.py) ÎNAINTE
-de orice funcție din acest fișier care generează embeddings
-(construieste_index / selecteaza_chunkuri_relevante), altfel API-ul Gemini
-va refuza cererile.
-"""
-
 import re
 import time
 from typing import List, Dict, Any, Optional, Tuple
@@ -21,7 +10,7 @@ import google.generativeai as genai
 # ----------------------------
 # CONFIGURARE MODEL EMBEDDING
 # ----------------------------
-EMBEDDING_MODEL = "models/gemini-embedding-001"
+EMBEDDING_MODEL = "models/text-embedding-004"
 # 768 e suficient pentru un singur document de lege și ține indexul mic/rapid;
 # modelul suportă și 1536 / 3072 dacă vrei mai multă precizie.
 EMBEDDING_DIM = 768
@@ -152,11 +141,14 @@ def genereaza_chunkuri_finale(
 # ----------------------------
 def _embed_batch(texts: List[str], task_type: str) -> np.ndarray:
     """
-    Apelează Gemini embed_content pentru un batch de texte (<= EMBEDDING_BATCH_SIZE),
-    cu reîncercări simple în caz de eroare temporară / rate limit.
+    Apelează Gemini embed_content cu Exponential Backoff pentru erori de Rate Limit (429).
     """
+    max_retries = 5
+    base_delay = 10  # Secunde de la care pornește așteptarea
+
     ultima_eroare: Optional[Exception] = None
-    for incercare in range(EMBEDDING_MAX_RETRIES):
+    
+    for incercare in range(max_retries):
         try:
             rezultat = genai.embed_content(
                 model=EMBEDDING_MODEL,
@@ -165,29 +157,26 @@ def _embed_batch(texts: List[str], task_type: str) -> np.ndarray:
                 output_dimensionality=EMBEDDING_DIM,
             )
             embeddings = rezultat["embedding"]
-            # Dacă am trimis un singur text, unele versiuni ale API-ului
-            # întorc direct vectorul (listă de float-uri), nu o listă de vectori.
             if embeddings and isinstance(embeddings[0], (int, float)):
                 embeddings = [embeddings]
             return np.asarray(embeddings, dtype="float32")
-        except Exception as e:  # rate limit / eroare de rețea temporară
+            
+        except Exception as e:
             ultima_eroare = e
-            if incercare < EMBEDDING_MAX_RETRIES - 1:
-                time.sleep(EMBEDDING_RETRY_DELAY_SEC)
+            # Verificăm dacă e eroare de quota / rate limit (429)
+            if "429" in str(e) or "Quota exceeded" in str(e):
+                delay = base_delay * (2 ** incercare)  # Așteaptă 10s, 20s, 40s...
+                print(f"[Rate Limit] Așteptăm {delay} secunde înainte de reîncercare (Încercarea {incercare + 1}/{max_retries})...")
+                time.sleep(delay)
+            else:
+                # Dacă e altă eroare, așteptare scurtă
+                time.sleep(3)
 
     raise RuntimeError(
-        f"Nu am putut genera embeddings după {EMBEDDING_MAX_RETRIES} încercări: {ultima_eroare}"
+        f"Nu am putut genera embeddings după {max_retries} încercări: {ultima_eroare}"
     ) from ultima_eroare
 
-
 def _embed_texts(texts: List[str], task_type: str = "retrieval_document") -> np.ndarray:
-    """
-    Generează embeddings pentru o listă de texte folosind API-ul Gemini,
-    trimițând cererile în batch-uri (EMBEDDING_BATCH_SIZE texte/cerere).
-
-    task_type: "retrieval_document" pentru chunk-urile indexate,
-               "retrieval_query" pentru întrebarea utilizatorului.
-    """
     if not texts:
         return np.zeros((0, EMBEDDING_DIM), dtype="float32")
 
@@ -195,9 +184,13 @@ def _embed_texts(texts: List[str], task_type: str = "retrieval_document") -> np.
     for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
         batch = texts[i:i + EMBEDDING_BATCH_SIZE]
         toate.append(_embed_batch(batch, task_type))
+        
+        # Pauză de 1-2 secunde între batch-uri consecutive pentru a nu sufoca API-ul gratuit
+        if i + EMBEDDING_BATCH_SIZE < len(texts):
+            time.sleep(1.5)
+
     embeddings = np.vstack(toate)
 
-    # Normalizare L2 -> produsul scalar devine echivalent cu similaritatea cosinus.
     norme = np.linalg.norm(embeddings, axis=1, keepdims=True)
     norme[norme == 0] = 1.0
     return embeddings / norme
