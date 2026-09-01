@@ -4,8 +4,8 @@ import google.generativeai as genai
 from chunking import (
     extrage_text_din_html,
     genereaza_chunkuri_finale,
-    construieste_index,
     selecteaza_chunkuri_relevante,
+    incarca_sau_construieste_index,
 )
 
 st.set_page_config(page_title="Agent AI din pagină web", page_icon="🤖", layout="centered")
@@ -42,28 +42,19 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-# ---------- Încărcare + chunking (cache pe conținut, rulează o singură dată) ----------
-@st.cache_data(show_spinner=False)
-def proceseaza_fisier_local(nume_fisier: str):
-    with open(nume_fisier, "r", encoding="utf-8", errors="ignore") as f:
-        continut_html = f.read()
-    text_extras = extrage_text_din_html(continut_html)
-    chunkuri = genereaza_chunkuri_finale(text_extras, sursa=nume_fisier)
-    return chunkuri
+# ---------- Index persistent pe disc ----------
+# Acest cache supraviețuiește restartului Streamlit.
+# Dacă HTML-ul se modifică, SHA-256-ul nu mai corespunde și indexul
+# este reconstruit automat.
+INDEX_CACHE_LOCAL = "index_cache.pkl"
 
 
-# ---------- Index de embeddings Gemini (obiect ne-serializabil -> cache_resource, NU cache_data) ----------
-# Se face câte 1 apel API la Gemini per batch de chunk-uri, o singură dată,
-# datorită cache-ului de mai jos (nu se recalculează la fiecare întrebare).
 @st.cache_resource(show_spinner=False)
-def construieste_index_cache(nume_fisier: str, n_chunkuri: int):
-    """
-    n_chunkuri e doar parte din cheia de cache, ca să se reconstruiască indexul
-    dacă se schimbă fișierul sursă / numărul de chunk-uri generate.
-    """
-    chunkuri = proceseaza_fisier_local(nume_fisier)
-    index, _ = construieste_index(chunkuri)
-    return index
+def incarca_index_cache_persistent(nume_fisier: str, cale_cache: str):
+    return incarca_sau_construieste_index(
+        nume_fisier,
+        cale_cache,
+    )
 
 
 # ---------- State ----------
@@ -72,13 +63,27 @@ if "istoric" not in st.session_state:
 
 # ---------- Încărcare inițială ----------
 try:
-    with st.spinner("Se încarcă documentul și se generează embeddings (Gemini)..."):
-        chunkuri = proceseaza_fisier_local(FISIER_HTML_LOCAL)
-        index = construieste_index_cache(FISIER_HTML_LOCAL, len(chunkuri))
-    st.caption(f"📄 `{FISIER_HTML_LOCAL}` — {len(chunkuri)} fragmente indexate.")
+    with st.spinner("Se încarcă documentul și indexul local..."):
+        chunkuri, index, index_din_cache = incarca_index_cache_persistent(
+            FISIER_HTML_LOCAL,
+            INDEX_CACHE_LOCAL,
+        )
+
+    if index_din_cache:
+        st.success("⚡ Index încărcat de pe disc — fără reindexare Gemini.")
+    else:
+        st.success("✅ Index nou creat și salvat pe disc.")
+
+    st.caption(
+        f"📄 `{FISIER_HTML_LOCAL}` — {len(chunkuri)} fragmente indexate."
+    )
+
 except FileNotFoundError:
-    st.error(f"❌ Nu am găsit fișierul `{FISIER_HTML_LOCAL}` în directorul proiectului.")
+    st.error(
+        f"❌ Nu am găsit fișierul `{FISIER_HTML_LOCAL}` în directorul proiectului."
+    )
     st.stop()
+
 except Exception as e:
     st.error(f"❌ Eroare la procesarea fișierului HTML: {e}")
     st.stop()

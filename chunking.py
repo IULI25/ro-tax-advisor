@@ -1,5 +1,8 @@
 import re
 import time
+import hashlib
+import os
+import pickle
 from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
@@ -22,6 +25,9 @@ EMBEDDING_INITIAL_RETRY_DELAY = 10.0
 
 # Pauză proactivă de 2 secunde între batch-uri consecutive
 BATCH_DELAY_SEC = 2.0
+
+# Schimbă versiunea dacă modifici formatul chunkurilor/indexului.
+INDEX_CACHE_VERSION = 1
 
 # Regex pentru detectarea începutului unui articol de lege
 _ARTICOL_RE = re.compile(r"(?m)^\s*(Articolul|Art\.)\s+\d+", re.IGNORECASE)
@@ -222,6 +228,133 @@ def construieste_index(chunkuri: List[Dict[str, Any]]) -> Tuple[Optional[IndexEm
     index = IndexEmbeddings(embeddings)
 
     return index, embeddings
+
+
+
+# ----------------------------
+# 6. CACHE PERSISTENT PE DISC
+# ----------------------------
+def hash_fisier(nume_fisier: str) -> str:
+    """SHA-256 al documentului sursă; detectează orice modificare a HTML-ului."""
+    sha = hashlib.sha256()
+    with open(nume_fisier, "rb") as f:
+        for bloc in iter(lambda: f.read(1024 * 1024), b""):
+            sha.update(bloc)
+    return sha.hexdigest()
+
+
+def incarca_index_de_pe_disc(
+    cale_cache: str,
+    hash_sursa: str,
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[IndexEmbeddings]]:
+    """
+    Încarcă indexul existent fără niciun apel Gemini.
+    Returnează (None, None) dacă nu există sau nu mai este valid.
+    """
+    if not os.path.exists(cale_cache):
+        return None, None
+
+    try:
+        with open(cale_cache, "rb") as f:
+            date = pickle.load(f)
+
+        if date.get("version") != INDEX_CACHE_VERSION:
+            return None, None
+        if date.get("source_hash") != hash_sursa:
+            return None, None
+        if date.get("embedding_model") != EMBEDDING_MODEL:
+            return None, None
+        if date.get("embedding_dim") != EMBEDDING_DIM:
+            return None, None
+
+        chunkuri = date["chunkuri"]
+        embeddings = np.asarray(date["embeddings"], dtype="float32")
+
+        if embeddings.ndim != 2 or len(chunkuri) != embeddings.shape[0]:
+            return None, None
+
+        return chunkuri, IndexEmbeddings(embeddings)
+
+    except (OSError, EOFError, pickle.PickleError, KeyError, ValueError, TypeError):
+        # Cache invalid/corupt -> îl reconstruim.
+        return None, None
+
+
+def salveaza_index_pe_disc(
+    cale_cache: str,
+    hash_sursa: str,
+    chunkuri: List[Dict[str, Any]],
+    index: IndexEmbeddings,
+) -> None:
+    """Salvează indexul atomic, pentru a evita un cache parțial dacă aplicația cade."""
+    date = {
+        "version": INDEX_CACHE_VERSION,
+        "source_hash": hash_sursa,
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dim": EMBEDDING_DIM,
+        "chunkuri": chunkuri,
+        "embeddings": np.asarray(index.embeddings, dtype="float32"),
+    }
+
+    director = os.path.dirname(os.path.abspath(cale_cache))
+    os.makedirs(director, exist_ok=True)
+
+    cale_tmp = cale_cache + ".tmp"
+    with open(cale_tmp, "wb") as f:
+        pickle.dump(date, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    os.replace(cale_tmp, cale_cache)
+
+
+def incarca_sau_construieste_index(
+    nume_fisier: str,
+    cale_cache: str = "index_cache.pkl",
+) -> Tuple[List[Dict[str, Any]], Optional[IndexEmbeddings], bool]:
+    """
+    Prima rulare:
+      HTML -> chunkuri -> Gemini embeddings -> index_cache.pkl
+
+    Următoarele rulări:
+      index_cache.pkl -> memorie
+
+    Altfel spus, Gemini NU este apelat pentru embeddings la restart dacă
+    documentul și configurația embeddingului sunt neschimbate.
+
+    Returnează:
+      (chunkuri, index, folosit_cache)
+    """
+    hash_sursa = hash_fisier(nume_fisier)
+
+    chunkuri_cache, index_cache = incarca_index_de_pe_disc(
+        cale_cache,
+        hash_sursa,
+    )
+
+    if chunkuri_cache is not None and index_cache is not None:
+        return chunkuri_cache, index_cache, True
+
+    with open(nume_fisier, "r", encoding="utf-8", errors="ignore") as f:
+        continut_html = f.read()
+
+    text_extras = extrage_text_din_html(continut_html)
+    chunkuri = genereaza_chunkuri_finale(
+        text_extras,
+        sursa=nume_fisier,
+    )
+
+    index, _ = construieste_index(chunkuri)
+
+    if index is None:
+        raise RuntimeError("Nu s-a putut construi indexul pentru document.")
+
+    salveaza_index_pe_disc(
+        cale_cache,
+        hash_sursa,
+        chunkuri,
+        index,
+    )
+
+    return chunkuri, index, False
 
 
 # ----------------------------
