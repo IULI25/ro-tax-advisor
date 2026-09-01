@@ -10,7 +10,7 @@ import google.generativeai as genai
 # ----------------------------
 # CONFIGURARE MODEL EMBEDDING
 # ----------------------------
-EMBEDDING_MODEL = "models/text-embedding-004"
+EMBEDDING_MODEL = "gemini-embedding-2"
 # 768 e suficient pentru un singur document de lege și ține indexul mic/rapid;
 # modelul suportă și 1536 / 3072 dacă vrei mai multă precizie.
 EMBEDDING_DIM = 768
