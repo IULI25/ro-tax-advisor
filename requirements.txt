@@ -3,3 +3,4 @@ google-generativeai
 numpy
 beautifulsoup4
 google-api-core
+google.genai

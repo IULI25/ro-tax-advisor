@@ -1,5 +1,5 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
 
 from chunking import (
     incarca_si_indexeaza_html,
@@ -10,7 +10,7 @@ st.set_page_config(page_title="Agent AI din pagină web", page_icon="🤖", layo
 st.title("🤖 Consilier AI")
 
 FISIER_HTML_LOCAL = "Legea_nr.227_2015.html"
-MODELE_DISPONIBILE = ["gemini-1.5-flash", "gemini-1.5-pro"]
+MODELE_DISPONIBILE = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"]
 
 api_key = st.secrets.get("GEMINI_API_KEY")
 
@@ -36,7 +36,8 @@ if not api_key:
     )
     st.stop()
 
-genai.configure(api_key=api_key)
+# Initializare Client Nou
+client = genai.Client(api_key=api_key)
 
 # ---------- Cache rapid în RAM cu Streamlit ----------
 @st.cache_resource(show_spinner=False)
@@ -45,14 +46,14 @@ def obtine_index_local(nume_fisier: str):
 
 # ---------- State ----------
 if "istoric" not in st.session_state:
-    st.session_state.istoric = []  # listă de (intrebare, raspuns, surse)
+    st.session_state.istoric = []
 
 # ---------- Încărcare inițială instantanee ----------
 try:
     with st.spinner("Se încarcă documentul și se generează vectorii locali..."):
         chunkuri, vectorizer = obtine_index_local(FISIER_HTML_LOCAL)
 
-    st.success("⚡ Document indexat local instant (0 API Latency)!")
+    st.success("⚡ Document indexat local instant!")
     st.caption(f"📄 `{FISIER_HTML_LOCAL}` — {len(chunkuri)} fragmente indexate.")
 
 except FileNotFoundError:
@@ -63,9 +64,8 @@ except Exception as e:
     st.stop()
 
 
-# ---------- Funcția de răspuns ----------
-def raspunde(model_name: str, chunkuri: list, vectorizer, intrebare: str, istoric: list, top_k: int) -> tuple:
-    """Returnează: (răspuns, chunkuri_relevante)."""
+# ---------- Funcția de răspuns cu Noul Client ----------
+def raspunde(client: genai.Client, model_name: str, chunkuri: list, vectorizer, intrebare: str, istoric: list, top_k: int) -> tuple:
     chunkuri_relevante = selecteaza_chunkuri_relevante(chunkuri, intrebare, top_k=top_k, vectorizer=vectorizer)
 
     context_piese = []
@@ -99,8 +99,10 @@ Instrucțiuni:
 Întrebare: {intrebare}
 """
 
-    model = genai.GenerativeModel(model_name)
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+    )
 
     return response.text, chunkuri_relevante
 
@@ -135,7 +137,7 @@ if intrebare:
             with st.spinner("Agentul gândește..."):
                 try:
                     raspuns, chunkuri_relevante = raspunde(
-                        model_name, chunkuri, vectorizer, intrebare, st.session_state.istoric, top_k
+                        client, model_name, chunkuri, vectorizer, intrebare, st.session_state.istoric, top_k
                     )
                     st.markdown(raspuns)
                     if chunkuri_relevante:
