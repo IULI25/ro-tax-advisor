@@ -1,65 +1,31 @@
 import re
-import time
-import hashlib
-import os
-import pickle
+import math
+from collections import Counter
 from typing import List, Dict, Any, Optional, Tuple
-
 import numpy as np
 from bs4 import BeautifulSoup
-import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted, GoogleAPIError
-
-
-# ----------------------------
-# CONFIGURARE MODEL EMBEDDING
-# ----------------------------
-# Numele oficial al modelului în SDK-ul Gemini (ex: "models/text-embedding-004" sau "models/gemini-embedding-001")
-EMBEDDING_MODEL = "models/gemini-embedding-001"
-EMBEDDING_DIM = 768
-
-# Dimensiunea batch-ului redusă la 30 pentru a nu atinge limita de tokeni/cereri pe minut pe planul gratuit
-EMBEDDING_BATCH_SIZE = 30
-EMBEDDING_MAX_RETRIES = 5
-EMBEDDING_INITIAL_RETRY_DELAY = 10.0
-
-# Pauză proactivă de 2 secunde între batch-uri consecutive
-BATCH_DELAY_SEC = 2.0
-
-# Schimbă versiunea dacă modifici formatul chunkurilor/indexului.
-INDEX_CACHE_VERSION = 1
-
-# Regex pentru detectarea începutului unui articol de lege
-_ARTICOL_RE = re.compile(r"(?m)^\s*(Articolul|Art\.)\s+\d+", re.IGNORECASE)
 
 
 # ----------------------------
 # 1. EXTRAGERE TEXT DIN HTML
 # ----------------------------
 def extrage_text_din_html(html: str) -> str:
-    """
-    Extrage textul curat dintr-un HTML.
-    Elimină script, style și spații inutile.
-    """
+    """Extrage textul curat dintr-un HTML, eliminând tag-urile irelevante."""
     soup = BeautifulSoup(html, "html.parser")
-
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
 
     text = soup.get_text(separator="\n")
-    lines = [line.strip() for line in text.splitlines()]
-    lines = [line for line in lines if line]
-
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     return "\n".join(lines)
 
 
 # ----------------------------
-# 2. SPLIT PE ARTICOLE (cu fallback pe cuvinte)
+# 2. SPLIT PE ARTICOLE
 # ----------------------------
+_ARTICOL_RE = re.compile(r"(?m)^\s*(Articolul|Art\.)\s+\d+", re.IGNORECASE)
+
 def _split_pe_articole(text: str) -> List[str]:
-    """
-    Împarte textul la fiecare început de articol ("Articolul N" / "Art. N").
-    """
     matches = list(_ARTICOL_RE.finditer(text))
     if len(matches) < 2:
         return []
@@ -75,7 +41,6 @@ def _split_pe_articole(text: str) -> List[str]:
 
 
 def _split_segment_in_bucati(segment: str, chunk_size: int, overlap: int) -> List[str]:
-    """Împarte un segment în bucăți de `chunk_size` cuvinte, cu overlap."""
     words = segment.split()
     if not words:
         return []
@@ -91,10 +56,6 @@ def _split_segment_in_bucati(segment: str, chunk_size: int, overlap: int) -> Lis
             break
         start = end - overlap
     return bucati
-
-
-def _split_into_chunks(text: str, chunk_size: int = 800, overlap: int = 100) -> List[str]:
-    return _split_segment_in_bucati(text, chunk_size, overlap)
 
 
 # ----------------------------
@@ -131,260 +92,100 @@ def genereaza_chunkuri_finale(
 
 
 # ----------------------------
-# 4. EMBEDDINGS (Gemini API)
+# 4. MOTOR VECTORIAL LOCAL BM25 / TF-IDF
 # ----------------------------
-def _embed_batch(texts: List[str], task_type: str) -> np.ndarray:
-    """
-    Apelează Gemini embed_content cu extragere dinamică a timpului de retry oferit de server.
-    """
-    delay = EMBEDDING_INITIAL_RETRY_DELAY
-    ultima_eroare: Optional[Exception] = None
-
-    for incercare in range(EMBEDDING_MAX_RETRIES):
-        try:
-            rezultat = genai.embed_content(
-                model=EMBEDDING_MODEL,
-                content=texts,
-                task_type=task_type,
-                output_dimensionality=EMBEDDING_DIM,
-            )
-            embeddings = rezultat["embedding"]
-            if embeddings and isinstance(embeddings[0], (int, float)):
-                embeddings = [embeddings]
-            return np.asarray(embeddings, dtype="float32")
-
-        except (ResourceExhausted, GoogleAPIError, Exception) as e:
-            ultima_eroare = e
-            if incercare < EMBEDDING_MAX_RETRIES - 1:
-                # Căutăm secunde recomandate direct din mesajul de eroare al API-ului
-                match = re.search(r"retry in (\d+(\.\d+)?)s", str(e), re.IGNORECASE)
-                if match:
-                    timp_asteptare = float(match.group(1)) + 1.0
-                else:
-                    timp_asteptare = delay
-                    delay *= 2  # Exponential backoff
-
-                print(
-                    f"[Rate Limit] Așteptăm {timp_asteptare:.1f} secunde "
-                    f"(Încercarea {incercare + 1}/{EMBEDDING_MAX_RETRIES})..."
-                )
-                time.sleep(timp_asteptare)
-            else:
-                break
-
-    raise RuntimeError(
-        f"Nu am putut genera embeddings după {EMBEDDING_MAX_RETRIES} încercări: {ultima_eroare}"
-    ) from ultima_eroare
+def _tokenize(text: str) -> List[str]:
+    """Tokenizare rapidă în litere mici fără semne de punctuație."""
+    return re.findall(r"\w+", text.lower())
 
 
-def _embed_texts(texts: List[str], task_type: str = "retrieval_document") -> np.ndarray:
-    if not texts:
-        return np.zeros((0, EMBEDDING_DIM), dtype="float32")
+class VectorizerLocalBM25:
+    """Motor de căutare vectorial local bazat pe BM25 ultra-rapid (fără dependențe de rețea)."""
+    def __init__(self, k1: float = 1.5, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self.doc_len = []
+        self.avgdl = 0.0
+        self.doc_freqs = []
+        self.idf = {}
+        self.corpus_size = 0
 
-    toate = []
-    total_batches = (len(texts) + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
+    def fit(self, documents: List[str]):
+        self.corpus_size = len(documents)
+        if self.corpus_size == 0:
+            return
 
-    for idx, i in enumerate(range(0, len(texts), EMBEDDING_BATCH_SIZE)):
-        batch = texts[i:i + EMBEDDING_BATCH_SIZE]
-        toate.append(_embed_batch(batch, task_type))
+        df = Counter()
+        self.doc_len = []
+        self.doc_freqs = []
 
-        # Introducem o pauză controlată între batch-uri consecutive
-        if idx < total_batches - 1:
-            time.sleep(BATCH_DELAY_SEC)
+        for doc in documents:
+            tokens = _tokenize(doc)
+            self.doc_len.append(len(tokens))
+            freqs = Counter(tokens)
+            self.doc_freqs.append(freqs)
+            df.update(freqs.keys())
 
-    embeddings = np.vstack(toate)
+        self.avgdl = sum(self.doc_len) / self.corpus_size if self.corpus_size > 0 else 1.0
 
-    norme = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norme[norme == 0] = 1.0
-    return embeddings / norme
+        for word, freq in df.items():
+            # BM25 IDF Formula
+            self.idf[word] = math.log((self.corpus_size - freq + 0.5) / (freq + 0.5) + 1.0)
+
+    def search(self, query: str, top_k: int = 5) -> List[Tuple[int, float]]:
+        query_tokens = _tokenize(query)
+        if not query_tokens or self.corpus_size == 0:
+            return []
+
+        scores = np.zeros(self.corpus_size, dtype="float32")
+
+        for token in query_tokens:
+            if token not in self.idf:
+                continue
+            idf_val = self.idf[token]
+            for idx, freqs in enumerate(self.doc_freqs):
+                freq = freqs.get(token, 0)
+                if freq > 0:
+                    numerator = freq * (self.k1 + 1)
+                    denominator = freq + self.k1 * (1 - self.b + self.b * (self.doc_len[idx] / self.avgdl))
+                    scores[idx] += idf_val * (numerator / denominator)
+
+        indices = np.argsort(-scores)[:top_k]
+        return [(int(i), float(scores[i])) for i in indices if scores[i] > 0]
 
 
 # ----------------------------
-# 5. INDEX ÎN MEMORIE
+# 5. ÎNCĂRCARE ȘI INDEXARE INSTANTĂ
 # ----------------------------
-class IndexEmbeddings:
-    def __init__(self, embeddings: np.ndarray):
-        self.embeddings = embeddings
-
-    def search(self, query_embeddings: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
-        if self.embeddings.shape[0] == 0:
-            n_q = query_embeddings.shape[0]
-            return np.zeros((n_q, 0), dtype="float32"), np.full((n_q, 0), -1, dtype="int64")
-
-        scoruri_toate = query_embeddings @ self.embeddings.T
-        k = min(k, scoruri_toate.shape[1])
-
-        indici = np.argsort(-scoruri_toate, axis=1)[:, :k]
-        scoruri = np.take_along_axis(scoruri_toate, indici, axis=1)
-        return scoruri, indici
-
-
-def construieste_index(chunkuri: List[Dict[str, Any]]) -> Tuple[Optional[IndexEmbeddings], Optional[np.ndarray]]:
-    if not chunkuri:
-        return None, None
-
-    texts = [c["text"] for c in chunkuri]
-    embeddings = _embed_texts(texts, task_type="retrieval_document")
-    index = IndexEmbeddings(embeddings)
-
-    return index, embeddings
-
-
-
-# ----------------------------
-# 6. CACHE PERSISTENT PE DISC
-# ----------------------------
-def hash_fisier(nume_fisier: str) -> str:
-    """SHA-256 al documentului sursă; detectează orice modificare a HTML-ului."""
-    sha = hashlib.sha256()
-    with open(nume_fisier, "rb") as f:
-        for bloc in iter(lambda: f.read(1024 * 1024), b""):
-            sha.update(bloc)
-    return sha.hexdigest()
-
-
-def incarca_index_de_pe_disc(
-    cale_cache: str,
-    hash_sursa: str,
-) -> Tuple[Optional[List[Dict[str, Any]]], Optional[IndexEmbeddings]]:
-    """
-    Încarcă indexul existent fără niciun apel Gemini.
-    Returnează (None, None) dacă nu există sau nu mai este valid.
-    """
-    if not os.path.exists(cale_cache):
-        return None, None
-
-    try:
-        with open(cale_cache, "rb") as f:
-            date = pickle.load(f)
-
-        if date.get("version") != INDEX_CACHE_VERSION:
-            return None, None
-        if date.get("source_hash") != hash_sursa:
-            return None, None
-        if date.get("embedding_model") != EMBEDDING_MODEL:
-            return None, None
-        if date.get("embedding_dim") != EMBEDDING_DIM:
-            return None, None
-
-        chunkuri = date["chunkuri"]
-        embeddings = np.asarray(date["embeddings"], dtype="float32")
-
-        if embeddings.ndim != 2 or len(chunkuri) != embeddings.shape[0]:
-            return None, None
-
-        return chunkuri, IndexEmbeddings(embeddings)
-
-    except (OSError, EOFError, pickle.PickleError, KeyError, ValueError, TypeError):
-        # Cache invalid/corupt -> îl reconstruim.
-        return None, None
-
-
-def salveaza_index_pe_disc(
-    cale_cache: str,
-    hash_sursa: str,
-    chunkuri: List[Dict[str, Any]],
-    index: IndexEmbeddings,
-) -> None:
-    """Salvează indexul atomic, pentru a evita un cache parțial dacă aplicația cade."""
-    date = {
-        "version": INDEX_CACHE_VERSION,
-        "source_hash": hash_sursa,
-        "embedding_model": EMBEDDING_MODEL,
-        "embedding_dim": EMBEDDING_DIM,
-        "chunkuri": chunkuri,
-        "embeddings": np.asarray(index.embeddings, dtype="float32"),
-    }
-
-    director = os.path.dirname(os.path.abspath(cale_cache))
-    os.makedirs(director, exist_ok=True)
-
-    cale_tmp = cale_cache + ".tmp"
-    with open(cale_tmp, "wb") as f:
-        pickle.dump(date, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-    os.replace(cale_tmp, cale_cache)
-
-
-def incarca_sau_construieste_index(
-    nume_fisier: str,
-    cale_cache: str = "index_cache.pkl",
-) -> Tuple[List[Dict[str, Any]], Optional[IndexEmbeddings], bool]:
-    """
-    Prima rulare:
-      HTML -> chunkuri -> Gemini embeddings -> index_cache.pkl
-
-    Următoarele rulări:
-      index_cache.pkl -> memorie
-
-    Altfel spus, Gemini NU este apelat pentru embeddings la restart dacă
-    documentul și configurația embeddingului sunt neschimbate.
-
-    Returnează:
-      (chunkuri, index, folosit_cache)
-    """
-    hash_sursa = hash_fisier(nume_fisier)
-
-    chunkuri_cache, index_cache = incarca_index_de_pe_disc(
-        cale_cache,
-        hash_sursa,
-    )
-
-    if chunkuri_cache is not None and index_cache is not None:
-        return chunkuri_cache, index_cache, True
-
+def incarca_si_indexeaza_html(nume_fisier: str) -> Tuple[List[Dict[str, Any]], VectorizerLocalBM25]:
+    """Citesște direct HTML-ul și construiește vectorii local în milisecunde."""
     with open(nume_fisier, "r", encoding="utf-8", errors="ignore") as f:
         continut_html = f.read()
 
     text_extras = extrage_text_din_html(continut_html)
-    chunkuri = genereaza_chunkuri_finale(
-        text_extras,
-        sursa=nume_fisier,
-    )
+    chunkuri = genereaza_chunkuri_finale(text_extras, sursa=nume_fisier)
 
-    index, _ = construieste_index(chunkuri)
+    vectorizer = VectorizerLocalBM25()
+    vectorizer.fit([c["text"] for c in chunkuri])
 
-    if index is None:
-        raise RuntimeError("Nu s-a putut construi indexul pentru document.")
-
-    salveaza_index_pe_disc(
-        cale_cache,
-        hash_sursa,
-        chunkuri,
-        index,
-    )
-
-    return chunkuri, index, False
+    return chunkuri, vectorizer
 
 
-# ----------------------------
-# 6. SELECȚIE CHUNK-URI RELEVANTE
-# ----------------------------
 def selecteaza_chunkuri_relevante(
     chunkuri: List[Dict[str, Any]],
     intrebare: str,
     top_k: int = 5,
-    index: Optional[IndexEmbeddings] = None,
+    vectorizer: Optional[VectorizerLocalBM25] = None,
 ) -> List[Dict[str, Any]]:
-    if not chunkuri:
+    if not chunkuri or vectorizer is None:
         return []
 
-    if index is None:
-        index, _ = construieste_index(chunkuri)
-        if index is None:
-            return []
-
-    query_embedding = _embed_texts([intrebare], task_type="retrieval_query")
-
-    k = min(top_k, len(chunkuri))
-    scores, indices = index.search(query_embedding, k)
-
     rezultate = []
-    for score, idx in zip(scores[0], indices[0]):
-        if idx == -1:
-            continue
-        chunk = chunkuri[int(idx)].copy()
-        chunk["score"] = float(score)
+    top_matches = vectorizer.search(intrebare, top_k=top_k)
+
+    for idx, scor in top_matches:
+        chunk = chunkuri[idx].copy()
+        chunk["score"] = scor
         rezultate.append(chunk)
 
     return rezultate

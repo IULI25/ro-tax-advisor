@@ -2,18 +2,15 @@ import streamlit as st
 import google.generativeai as genai
 
 from chunking import (
-    extrage_text_din_html,
-    genereaza_chunkuri_finale,
+    incarca_si_indexeaza_html,
     selecteaza_chunkuri_relevante,
-    incarca_sau_construieste_index,
 )
 
 st.set_page_config(page_title="Agent AI din pagină web", page_icon="🤖", layout="centered")
 st.title("🤖 Consilier AI")
 
 FISIER_HTML_LOCAL = "Legea_nr.227_2015.html"
-MODELE_DISPONIBILE = ["gemini-3.7-flash","gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
-
+MODELE_DISPONIBILE = ["gemini-1.5-flash", "gemini-1.5-pro"]
 
 api_key = st.secrets.get("GEMINI_API_KEY")
 
@@ -35,64 +32,41 @@ with st.sidebar:
 if not api_key:
     st.error(
         "❌ Nu am găsit GEMINI_API_KEY.\n\n"
-        "Adaugă-l în `.streamlit/secrets.toml` sau în configurația Streamlit "
-        "pentru a putea genera atât embeddings, cât și răspunsurile."
+        "Adaugă-l în `.streamlit/secrets.toml` sau în configurația Streamlit."
     )
     st.stop()
 
 genai.configure(api_key=api_key)
 
-# ---------- Index persistent pe disc ----------
-# Acest cache supraviețuiește restartului Streamlit.
-# Dacă HTML-ul se modifică, SHA-256-ul nu mai corespunde și indexul
-# este reconstruit automat.
-INDEX_CACHE_LOCAL = "index_cache.pkl"
-
-
+# ---------- Cache rapid în RAM cu Streamlit ----------
 @st.cache_resource(show_spinner=False)
-def incarca_index_cache_persistent(nume_fisier: str, cale_cache: str):
-    return incarca_sau_construieste_index(
-        nume_fisier,
-        cale_cache,
-    )
-
+def obtine_index_local(nume_fisier: str):
+    return incarca_si_indexeaza_html(nume_fisier)
 
 # ---------- State ----------
 if "istoric" not in st.session_state:
     st.session_state.istoric = []  # listă de (intrebare, raspuns, surse)
 
-# ---------- Încărcare inițială ----------
+# ---------- Încărcare inițială instantanee ----------
 try:
-    with st.spinner("Se încarcă documentul și indexul local..."):
-        chunkuri, index, index_din_cache = incarca_index_cache_persistent(
-            FISIER_HTML_LOCAL,
-            INDEX_CACHE_LOCAL,
-        )
+    with st.spinner("Se încarcă documentul și se generează vectorii locali..."):
+        chunkuri, vectorizer = obtine_index_local(FISIER_HTML_LOCAL)
 
-    if index_din_cache:
-        st.success("⚡ Index încărcat de pe disc — fără reindexare Gemini.")
-    else:
-        st.success("✅ Index nou creat și salvat pe disc.")
-
-    st.caption(
-        f"📄 `{FISIER_HTML_LOCAL}` — {len(chunkuri)} fragmente indexate."
-    )
+    st.success("⚡ Document indexat local instant (0 API Latency)!")
+    st.caption(f"📄 `{FISIER_HTML_LOCAL}` — {len(chunkuri)} fragmente indexate.")
 
 except FileNotFoundError:
-    st.error(
-        f"❌ Nu am găsit fișierul `{FISIER_HTML_LOCAL}` în directorul proiectului."
-    )
+    st.error(f"❌ Nu am găsit fișierul `{FISIER_HTML_LOCAL}` în directorul proiectului.")
     st.stop()
-
 except Exception as e:
     st.error(f"❌ Eroare la procesarea fișierului HTML: {e}")
     st.stop()
 
 
 # ---------- Funcția de răspuns ----------
-def raspunde(model_name: str, chunkuri: list, index, intrebare: str, istoric: list, top_k: int) -> tuple:
+def raspunde(model_name: str, chunkuri: list, vectorizer, intrebare: str, istoric: list, top_k: int) -> tuple:
     """Returnează: (răspuns, chunkuri_relevante)."""
-    chunkuri_relevante = selecteaza_chunkuri_relevante(chunkuri, intrebare, top_k=top_k, index=index)
+    chunkuri_relevante = selecteaza_chunkuri_relevante(chunkuri, intrebare, top_k=top_k, vectorizer=vectorizer)
 
     context_piese = []
     for c in chunkuri_relevante:
@@ -134,7 +108,6 @@ Instrucțiuni:
 # ---------- UI: chat ----------
 st.subheader("💬 Întreabă agentul")
 
-# afișează istoricul ca o conversație reală
 for q, a, surse in st.session_state.istoric:
     with st.chat_message("user"):
         st.markdown(q)
@@ -162,7 +135,7 @@ if intrebare:
             with st.spinner("Agentul gândește..."):
                 try:
                     raspuns, chunkuri_relevante = raspunde(
-                        model_name, chunkuri, index, intrebare, st.session_state.istoric, top_k
+                        model_name, chunkuri, vectorizer, intrebare, st.session_state.istoric, top_k
                     )
                     st.markdown(raspuns)
                     if chunkuri_relevante:
