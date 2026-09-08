@@ -10,7 +10,7 @@ from sentence_transformers import SentenceTransformer
 
 from chunking import extrage_text_din_html, genereaza_chunkuri_finale
 
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_NAME = "intfloat/multilingual-e5-base"
 DEFAULT_PERSIST_DIR = "./chroma_db"
 DEFAULT_COLLECTION = "documente_legislative"
 
