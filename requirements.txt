@@ -4,3 +4,5 @@ numpy
 beautifulsoup4
 google-api-core
 google.genai
+sentence-transformers
+chromadb 

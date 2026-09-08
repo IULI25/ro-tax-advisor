@@ -1,10 +1,7 @@
 import streamlit as st
 from google import genai
 
-from chunking import (
-    incarca_si_indexeaza_html,
-    selecteaza_chunkuri_relevante,
-)
+from embedding import indexeaza_fisier_html
 
 st.set_page_config(page_title="Agent AI din pagină web", page_icon="🤖", layout="centered")
 st.title("🤖 Consilier AI")
@@ -39,22 +36,22 @@ if not api_key:
 # Initializare Client Nou
 client = genai.Client(api_key=api_key)
 
-# ---------- Cache rapid în RAM cu Streamlit ----------
+# ---------- Cache în RAM cu Streamlit (modelul + colecția Chroma se încarcă o singură dată) ----------
 @st.cache_resource(show_spinner=False)
 def obtine_index_local(nume_fisier: str):
-    return incarca_si_indexeaza_html(nume_fisier)
+    return indexeaza_fisier_html(nume_fisier, persist_dir="./chroma_db")
 
 # ---------- State ----------
 if "istoric" not in st.session_state:
     st.session_state.istoric = []
 
-# ---------- Încărcare inițială instantanee ----------
+# ---------- Încărcare inițială (embeddings + ChromaDB persistent) ----------
 try:
-    with st.spinner("Se încarcă documentul și se generează vectorii locali..."):
-        chunkuri, vectorizer = obtine_index_local(FISIER_HTML_LOCAL)
+    with st.spinner("Se încarcă documentul și se generează embeddings..."):
+        store = obtine_index_local(FISIER_HTML_LOCAL)
 
-    st.success("⚡ Document indexat local instant!")
-    st.caption(f"📄 `{FISIER_HTML_LOCAL}` — {len(chunkuri)} fragmente indexate.")
+    st.success("⚡ Document indexat cu embeddings semantice!")
+    st.caption(f"📄 `{FISIER_HTML_LOCAL}` — {store.collection.count()} fragmente indexate.")
 
 except FileNotFoundError:
     st.error(f"❌ Nu am găsit fișierul `{FISIER_HTML_LOCAL}` în directorul proiectului.")
@@ -65,8 +62,8 @@ except Exception as e:
 
 
 # ---------- Funcția de răspuns cu Noul Client ----------
-def raspunde(client: genai.Client, model_name: str, chunkuri: list, vectorizer, intrebare: str, istoric: list, top_k: int) -> tuple:
-    chunkuri_relevante = selecteaza_chunkuri_relevante(chunkuri, intrebare, top_k=top_k, vectorizer=vectorizer)
+def raspunde(client: genai.Client, model_name: str, store, intrebare: str, istoric: list, top_k: int) -> tuple:
+    chunkuri_relevante = store.cauta(intrebare, top_k=top_k)
 
     context_piese = []
     for c in chunkuri_relevante:
@@ -137,7 +134,7 @@ if intrebare:
             with st.spinner("Agentul gândește..."):
                 try:
                     raspuns, chunkuri_relevante = raspunde(
-                        client, model_name, chunkuri, vectorizer, intrebare, st.session_state.istoric, top_k
+                        client, model_name, store, intrebare, st.session_state.istoric, top_k
                     )
                     st.markdown(raspuns)
                     if chunkuri_relevante:
