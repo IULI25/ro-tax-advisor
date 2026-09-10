@@ -7,7 +7,7 @@ st.set_page_config(page_title="Agent AI din pagină web", page_icon="🤖", layo
 st.title("🤖 Consilier AI")
 
 FISIER_HTML_LOCAL = "Legea_nr_227_2015.html"
-MODELE_DISPONIBILE = ["gemini-3.7-flash","gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lit"]
+MODELE_DISPONIBILE = ["gemini-3.7-flash","gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
 
 api_key = st.secrets.get("GEMINI_API_KEY")
 
