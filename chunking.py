@@ -64,7 +64,7 @@ def _split_segment_in_bucati(segment: str, chunk_size: int, overlap: int) -> Lis
 def genereaza_chunkuri_finale(
     text: str,
     sursa: str,
-    chunk_size: int = 220,
+    chunk_size: int = 500,
     overlap: int = 30,
 ) -> List[Dict[str, Any]]:
     segmente = _split_pe_articole(text)
