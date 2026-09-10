@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -68,6 +68,12 @@ class EmbeddingStore:
                 metadatas=metadatas,
             )
 
+    def sursa_indexata(self, sursa: str) -> bool:
+        """Verifică dacă un anumit fișier sursă a fost deja indexat în colecție
+        (nu doar dacă întreaga colecție e goală)."""
+        existente = self.collection.get(where={"source": sursa}, limit=1)
+        return len(existente.get("ids", [])) > 0
+
     def cauta(self, intrebare: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """Căutare semantică prin similaritate cosine pe embeddings."""
         query_emb = self._embed([intrebare])
@@ -102,6 +108,14 @@ def indexeaza_fisier_html(
     overlap: int = 30,
 ) -> EmbeddingStore:
     """Pipeline complet: HTML -> text -> chunk-uri -> embeddings -> ChromaDB persistent."""
+    store = EmbeddingStore(persist_dir=persist_dir, collection_name=collection_name)
+
+    # verificăm dacă ACEST fișier a fost deja indexat anterior, nu doar dacă
+    # întreaga colecție e goală -- altfel fișierele adăugate ulterior într-o
+    # colecție deja populată nu ar mai fi indexate niciodată
+    if store.sursa_indexata(nume_fisier):
+        return store
+
     with open(nume_fisier, "r", encoding="utf-8", errors="ignore") as f:
         continut_html = f.read()
 
@@ -110,11 +124,7 @@ def indexeaza_fisier_html(
         text_extras, sursa=nume_fisier, chunk_size=chunk_size, overlap=overlap
     )
 
-    store = EmbeddingStore(persist_dir=persist_dir, collection_name=collection_name)
-    # dacă fișierul a mai fost indexat anterior (colecția e persistentă pe disc),
-    # nu recalculăm embeddings-urile inutil
-    if store.collection.count() == 0:
-        store.adauga_chunkuri(chunkuri)
+    store.adauga_chunkuri(chunkuri)
     return store
 
 

@@ -41,6 +41,16 @@ def _split_pe_articole(text: str) -> List[str]:
 
 
 def _split_segment_in_bucati(segment: str, chunk_size: int, overlap: int) -> List[str]:
+    # gardă: dacă overlap >= chunk_size, start nu mai avansează -> buclă infinită
+    if chunk_size <= 0:
+        raise ValueError("chunk_size trebuie să fie un întreg pozitiv")
+    if overlap < 0:
+        raise ValueError("overlap trebuie să fie >= 0")
+    if overlap >= chunk_size:
+        raise ValueError(
+            f"overlap ({overlap}) trebuie să fie mai mic decât chunk_size ({chunk_size})"
+        )
+
     words = segment.split()
     if not words:
         return []
@@ -109,6 +119,9 @@ class VectorizerLocalBM25:
         self.doc_freqs = []
         self.idf = {}
         self.corpus_size = 0
+        # index invers token -> {doc_idx: freq}, pentru căutare rapidă
+        # fără a itera peste tot corpusul la fiecare token din query
+        self._inverted_index: Dict[str, Dict[int, int]] = {}
 
     def fit(self, documents: List[str]):
         self.corpus_size = len(documents)
@@ -118,13 +131,17 @@ class VectorizerLocalBM25:
         df = Counter()
         self.doc_len = []
         self.doc_freqs = []
+        self._inverted_index = {}
 
-        for doc in documents:
+        for doc_idx, doc in enumerate(documents):
             tokens = _tokenize(doc)
             self.doc_len.append(len(tokens))
             freqs = Counter(tokens)
             self.doc_freqs.append(freqs)
             df.update(freqs.keys())
+
+            for token, freq in freqs.items():
+                self._inverted_index.setdefault(token, {})[doc_idx] = freq
 
         self.avgdl = sum(self.doc_len) / self.corpus_size if self.corpus_size > 0 else 1.0
 
@@ -143,12 +160,11 @@ class VectorizerLocalBM25:
             if token not in self.idf:
                 continue
             idf_val = self.idf[token]
-            for idx, freqs in enumerate(self.doc_freqs):
-                freq = freqs.get(token, 0)
-                if freq > 0:
-                    numerator = freq * (self.k1 + 1)
-                    denominator = freq + self.k1 * (1 - self.b + self.b * (self.doc_len[idx] / self.avgdl))
-                    scores[idx] += idf_val * (numerator / denominator)
+            # folosim indexul invers: doar documentele care chiar conțin tokenul
+            postings = self._inverted_index.get(token, {})
+            for idx, freq in postings.items():
+                denominator = freq + self.k1 * (1 - self.b + self.b * (self.doc_len[idx] / self.avgdl))
+                scores[idx] += idf_val * (freq * (self.k1 + 1) / denominator)
 
         indices = np.argsort(-scores)[:top_k]
         return [(int(i), float(scores[i])) for i in indices if scores[i] > 0]
@@ -158,7 +174,7 @@ class VectorizerLocalBM25:
 # 5. ÎNCĂRCARE ȘI INDEXARE INSTANTĂ
 # ----------------------------
 def incarca_si_indexeaza_html(nume_fisier: str) -> Tuple[List[Dict[str, Any]], VectorizerLocalBM25]:
-    """Citesște direct HTML-ul și construiește vectorii local în milisecunde."""
+    """Citește direct HTML-ul și construiește vectorii local în milisecunde."""
     with open(nume_fisier, "r", encoding="utf-8", errors="ignore") as f:
         continut_html = f.read()
 
