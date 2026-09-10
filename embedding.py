@@ -1,8 +1,3 @@
-"""
-Extensie pentru chunking.py: generează embeddings cu sentence-transformers
-(all-MiniLM-L6-v2) și le salvează persistent într-un ChromaDB local (SQLite pe disc).
-"""
-
 from typing import List, Dict, Any, Optional
 
 import chromadb
@@ -103,7 +98,7 @@ def indexeaza_fisier_html(
     nume_fisier: str,
     persist_dir: str = DEFAULT_PERSIST_DIR,
     collection_name: str = DEFAULT_COLLECTION,
-    chunk_size: int = 220,
+    chunk_size: int = 500,
     overlap: int = 30,
 ) -> EmbeddingStore:
     """Pipeline complet: HTML -> text -> chunk-uri -> embeddings -> ChromaDB persistent."""
