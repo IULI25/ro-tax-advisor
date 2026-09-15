@@ -65,8 +65,6 @@ except Exception as e:
 # ---------- Funcția de răspuns cu Noul Client ----------
 def raspunde(client: genai.Client, model_name: str, store, intrebare: str, istoric: list, top_k: int) -> tuple:
     chunkuri_relevante = store.cauta(intrebare, top_k=top_k)
-    
-
     context_piese = []
     for c in chunkuri_relevante:
         sursa = c.get("source", "necunoscut")
