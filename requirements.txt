@@ -6,3 +6,7 @@ google-api-core
 google.genai
 sentence-transformers
 chromadb 
+arize-phoenix-otel
+openinference-instrumentation-google-genai
+opentelemetry-sdk
+opentelemetry-exporter-otlp
