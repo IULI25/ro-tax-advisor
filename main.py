@@ -65,14 +65,7 @@ except Exception as e:
 # ---------- Funcția de răspuns cu Noul Client ----------
 def raspunde(client: genai.Client, model_name: str, store, intrebare: str, istoric: list, top_k: int) -> tuple:
     chunkuri_relevante = store.cauta(intrebare, top_k=top_k)
-    with tracer.start_as_current_span("retrieval_chroma") as span:
-        span.set_attribute("input.value", intrebare)
-        span.set_attribute("retrieval.top_k", top_k)
-        chunkuri_relevante = store.cauta(intrebare, top_k=top_k)
-        span.set_attribute("retrieval.num_results", len(chunkuri_relevante))
-        for i, c in enumerate(chunkuri_relevante):
-            span.set_attribute(f"retrieval.documents.{i}.document.content", c.get("text", "")[:500])
-            span.set_attribute(f"retrieval.documents.{i}.document.score", c.get("score", 0.0))
+    
 
     context_piese = []
     for c in chunkuri_relevante:
