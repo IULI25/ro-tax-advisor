@@ -10,3 +10,4 @@ arize-phoenix-otel
 openinference-instrumentation-google-genai
 opentelemetry-sdk
 opentelemetry-exporter-otlp
+torchvision
