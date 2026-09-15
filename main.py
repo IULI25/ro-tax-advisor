@@ -2,10 +2,7 @@ import streamlit as st
 from google import genai
 
 from embedding import indexeaza_fisier_html
-from tracing import initializeaza_tracing, obtine_tracer
 
-initializeaza_tracing()  
-tracer = obtine_tracer()
 
 st.set_page_config(page_title="Agent AI din pagină web", page_icon="🤖", layout="centered")
 st.title("🤖 Consilier AI")
